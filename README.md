@@ -1,4 +1,4 @@
-# Open OSINT Kit 1.3.0
+# Open OSINT Kit 1.5.0
 
 ![Open OSINT Kit: open-source intelligence](assets/banner.svg)
 
@@ -17,6 +17,12 @@ Cross-platform Python CLI for authorized research into domains, infrastructure, 
 `profiles` checks one username against public APIs for GitHub, GitLab, DEV Community, Hacker News, Bluesky, Reddit, Mastodon.social, Codeberg, and Hugging Face. It displays only exact confirmed matches with their category and public profile URL; missing accounts and unavailable APIs are omitted. For Bluesky, a username without a domain is checked as `<username>.bsky.social`. Mastodon checks the `mastodon.social` instance only.
 
 `phone` validates an international E.164 number and reports its formatting, numbering-plan region, and line type. It does not query carriers, identify owners, or verify that a line is active.
+
+`shodan` performs a passive indexed-data lookup for one public IP. It returns hostnames, domains, organization, ISP, ASN, country code, and last update only; it does not scan or return ports, banners, or vulnerability data.
+
+`config set-shodan-key` prompts for the key without echoing it and stores it in the operating system keyring. `SHODAN_API_KEY` is also supported and takes precedence. The key is never printed or included in reports.
+
+Terminal help and JSON output use color by default. Rich automatically disables color when output is redirected; set `NO_COLOR=1` to disable it explicitly.
 
 `--update` checks this repository's latest stable release and, when a newer version is available, installs the source archive for that release tag with `pip`.
 
@@ -40,7 +46,7 @@ bash ./install.sh
 osint-kit --help
 ```
 
-The installers add the command directory to the user's PATH. On Linux, the application runs in an isolated virtual environment under `~/.local/share/open-osint-kit` and uses the base Python interpreter, even when the installer is launched from another virtual environment. Open a new terminal after installation to apply the updated PATH to other sessions.
+The installers add the command directory to the invoking user's PATH and show verbose `pip` output by default. On Linux, the application runs as the invoking user in an isolated virtual environment under `~/.local/share/open-osint-kit`; the installer does not create a shared service account or group. Open a new terminal after installation to apply the updated PATH to other sessions.
 
 ## Uninstallation
 
@@ -56,7 +62,7 @@ On Linux, run from the repository root:
 bash ./uninstall.sh
 ```
 
-The uninstaller removes the per-user package on Windows or the kit's virtual environment and launcher on Linux. It does not uninstall `phonenumbers` on Windows because other applications may use it. It removes a PATH entry only when a recent installer recorded that it added the entry. Installations older than 1.1.1 may leave a shared PATH entry; in that case, it is preserved to avoid affecting other tools. Remove it manually only after confirming that no other application uses it.
+The uninstaller removes the per-user package on Windows or the kit's virtual environment and launcher on Linux. It does not uninstall shared Python dependencies. It removes a PATH entry only when a recent installer recorded that it added the entry. Installations older than 1.1.1 may leave a shared PATH entry; in that case, it is preserved to avoid affecting other tools. During an interactive uninstall, you can confirm optional removal of generated `build`, `dist`, `egg-info`, and `__pycache__` artifacts and the Shodan key from the OS keyring. Reports saved to user-selected `--output` paths and environment variables such as `SHODAN_API_KEY` are never deleted. Non-interactive uninstall keeps generated data and the key by default.
 
 ## Usage
 
@@ -75,9 +81,13 @@ osint-kit search "Example Inc" --kind company
 osint-kit profiles example_user --timeout 5 --output profiles.json
 osint-kit search example_user --kind username
 osint-kit phone +14155552671
+osint-kit config set-shodan-key
+osint-kit config status
+osint-kit shodan 8.8.8.8 --output shodan-report.json
+osint-kit config remove-shodan-key
 ```
 
-`domain`, `ip`, `profiles`, and `--update` require an internet connection. `ioc` and `search` only generate links; `phone` analyzes numbering-plan metadata locally. The `domain` and `ip` timeouts apply per source, so a full run may take longer than the configured timeout. `profiles` queries each supported API once, concurrently, and may omit services that rate-limit or cannot be reached.
+`domain`, `ip`, `profiles`, `shodan`, and `--update` require an internet connection. `ioc`, `search`, `config`, and `phone` do not make Shodan requests; `phone` analyzes numbering-plan metadata locally. The `domain` and `ip` timeouts apply per source, so a full run may take longer than the configured timeout. `profiles` queries each supported API once, concurrently, and may omit services that rate-limit or cannot be reached.
 
 ## Responsible Use
 

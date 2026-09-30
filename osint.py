@@ -5,8 +5,10 @@ from __future__ import annotations
 
 import argparse
 import base64
+import getpass
 import ipaddress
 import json
+import os
 import re
 import subprocess
 import sys
@@ -17,14 +19,29 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode, urlsplit
 from urllib.request import Request, urlopen
 
+import keyring
+from keyring.errors import KeyringError, PasswordDeleteError
 import phonenumbers
+from rich.console import Console
+from rich.theme import Theme
+from rich_argparse import RichHelpFormatter
 
 
-__version__ = "1.3.0"
+__version__ = "1.5.0"
 USER_AGENT = f"OpenOSINTKit/{__version__} (passive public-source research)"
 GITHUB_RELEASE_API = "https://api.github.com/repos/IsdarlinM/open-osint-kit/releases/latest"
 GITHUB_ARCHIVE_URL = "https://github.com/IsdarlinM/open-osint-kit/archive/refs/tags/{tag}.zip"
 DNS_TYPES = ("A", "AAAA", "MX", "NS", "TXT", "CAA")
+KEYRING_SERVICE = "open-osint-kit"
+KEYRING_USERNAME = "shodan-api-key"
+CLI_THEME = Theme({
+    "success": "bold green",
+    "info": "cyan",
+    "warning": "yellow",
+    "error": "bold red",
+})
+CONSOLE = Console(theme=CLI_THEME, highlight=False)
+ERROR_CONSOLE = Console(stderr=True, theme=CLI_THEME, highlight=False)
 PHONE_NUMBER_TYPES = {
     phonenumbers.PhoneNumberType.FIXED_LINE: "fixed_line",
     phonenumbers.PhoneNumberType.MOBILE: "mobile",
@@ -39,6 +56,12 @@ PHONE_NUMBER_TYPES = {
     phonenumbers.PhoneNumberType.VOICEMAIL: "voicemail",
     phonenumbers.PhoneNumberType.UNKNOWN: "unknown",
 }
+
+
+class ColorArgumentParser(argparse.ArgumentParser):
+    def __init__(self, *args, **kwargs):
+        kwargs.setdefault("formatter_class", RichHelpFormatter)
+        super().__init__(*args, **kwargs)
 
 
 def fetch_json(url: str, timeout: int) -> object:
@@ -67,6 +90,111 @@ def valid_public_ip(value: str) -> str:
     if not address.is_global:
         raise argparse.ArgumentTypeError("only public IP addresses are supported")
     return str(address)
+
+
+def get_shodan_api_key() -> str | None:
+    environment_key = os.environ.get("SHODAN_API_KEY", "").strip()
+    if environment_key:
+        return environment_key
+    try:
+        return keyring.get_password(KEYRING_SERVICE, KEYRING_USERNAME)
+    except KeyringError:
+        return None
+
+
+def configure_shodan(action: str) -> int:
+    if action == "set-shodan-key":
+        if not sys.stdin.isatty():
+            ERROR_CONSOLE.print("[error]Run this command in an interactive terminal to enter the key safely.[/error]")
+            return 1
+        CONSOLE.print("[info]Enter your Shodan API key (input hidden):[/info]")
+        try:
+            api_key = getpass.getpass("").strip()
+        except (EOFError, KeyboardInterrupt):
+            ERROR_CONSOLE.print("[warning]Key entry cancelled.[/warning]")
+            return 1
+        if not api_key:
+            ERROR_CONSOLE.print("[error]The API key cannot be empty.[/error]")
+            return 1
+        try:
+            keyring.set_password(KEYRING_SERVICE, KEYRING_USERNAME, api_key)
+        except KeyringError:
+            ERROR_CONSOLE.print(
+                "[error]Secure OS key storage is unavailable. Set SHODAN_API_KEY in your environment instead.[/error]"
+            )
+            return 1
+        CONSOLE.print("[success]Shodan API key saved in the operating system keyring. The key was not displayed.[/success]")
+        return 0
+
+    if action == "remove-shodan-key":
+        try:
+            keyring.delete_password(KEYRING_SERVICE, KEYRING_USERNAME)
+        except PasswordDeleteError:
+            CONSOLE.print("[warning]No key was stored in the operating system keyring.[/warning]")
+        except KeyringError:
+            ERROR_CONSOLE.print("[error]Could not access the operating system keyring.[/error]")
+            return 1
+        else:
+            CONSOLE.print("[success]Stored Shodan API key removed.[/success]")
+        if os.environ.get("SHODAN_API_KEY"):
+            CONSOLE.print("[warning]SHODAN_API_KEY is still set in this environment and takes precedence.[/warning]")
+        return 0
+
+    environment_key = os.environ.get("SHODAN_API_KEY", "").strip()
+    if environment_key:
+        CONSOLE.print("[success]Shodan API key is configured through SHODAN_API_KEY.[/success]")
+        return 0
+    try:
+        stored_key = keyring.get_password(KEYRING_SERVICE, KEYRING_USERNAME)
+    except KeyringError:
+        ERROR_CONSOLE.print(
+            "[warning]The operating system keyring is unavailable. Set SHODAN_API_KEY to configure Shodan.[/warning]"
+        )
+        return 1
+    if stored_key:
+        CONSOLE.print("[success]Shodan API key is stored in the operating system keyring.[/success]")
+    else:
+        CONSOLE.print("[warning]Shodan API key is not configured.[/warning]")
+    return 0
+
+
+def build_shodan_report(address: str, api_key: str, timeout: int) -> dict:
+    url = f"https://api.shodan.io/shodan/host/{quote(address, safe='')}?{urlencode({'key': api_key})}"
+    try:
+        data = fetch_json(url, timeout)
+    except HTTPError as error:
+        if error.code == 404:
+            return {
+                "target": address,
+                "source": "Shodan",
+                "status": "no_indexed_record",
+                "mode": "passive indexed-data lookup; no scan performed",
+            }
+        message = {
+            401: "Shodan rejected the API key.",
+            403: "Shodan denied the request or the key lacks access.",
+            429: "Shodan rate limit reached.",
+        }.get(error.code, f"Shodan request failed with HTTP {error.code}.")
+        return {"target": address, "source": "Shodan", "status": "error", "error": message}
+    except (URLError, TimeoutError, OSError, ValueError, TypeError, AttributeError) as error:
+        return {
+            "target": address,
+            "source": "Shodan",
+            "status": "error",
+            "error": f"Shodan request failed ({type(error).__name__}).",
+        }
+    if not isinstance(data, dict):
+        return {"target": address, "source": "Shodan", "status": "error", "error": "Invalid Shodan response."}
+
+    allowed_fields = ("hostnames", "domains", "org", "isp", "asn", "country_code", "last_update")
+    metadata = {field: data[field] for field in allowed_fields if field in data}
+    return {
+        "target": address,
+        "source": "Shodan",
+        "status": "ok",
+        "mode": "passive indexed-data lookup; no scan performed",
+        "metadata": metadata,
+    }
 
 
 def safe_lookup(callback) -> dict:
@@ -475,20 +603,20 @@ def update_application() -> int:
     try:
         release = fetch_json(GITHUB_RELEASE_API, 15)
     except (HTTPError, URLError, TimeoutError, OSError, ValueError) as error:
-        print(f"Could not check GitHub for updates: {error}", file=sys.stderr)
+        ERROR_CONSOLE.print(f"[error]Could not check GitHub for updates: {error}[/error]")
         return 1
     if not isinstance(release, dict) or not isinstance(release.get("tag_name"), str):
-        print("GitHub returned invalid release information.", file=sys.stderr)
+        ERROR_CONSOLE.print("[error]GitHub returned invalid release information.[/error]")
         return 1
 
     tag = release["tag_name"]
     latest_version = release_version(tag)
     current_version = release_version(f"v{__version__}")
     if latest_version is None or current_version is None:
-        print(f"Unrecognized release version: {tag}", file=sys.stderr)
+        ERROR_CONSOLE.print(f"[error]Unrecognized release version: {tag}[/error]")
         return 1
     if latest_version <= current_version:
-        print(f"You already have the latest stable version ({__version__}).")
+        CONSOLE.print(f"[success]You already have the latest stable version ({__version__}).[/success]")
         return 0
 
     archive_url = GITHUB_ARCHIVE_URL.format(tag=quote(tag, safe=""))
@@ -496,14 +624,14 @@ def update_application() -> int:
     if sys.prefix == sys.base_prefix:
         command.append("--user")
     command.append(archive_url)
-    print(f"Updating from {__version__} to {tag} via GitHub...")
+    CONSOLE.print(f"[info]Updating from {__version__} to {tag} via GitHub...[/info]")
     try:
         result = subprocess.run(command, check=False)
     except OSError as error:
-        print(f"Could not start pip: {error}", file=sys.stderr)
+        ERROR_CONSOLE.print(f"[error]Could not start pip: {error}[/error]")
         return 1
     if result.returncode == 0:
-        print("Update complete. Restart the terminal if the old command is still loaded.")
+        CONSOLE.print("[success]Update complete. Restart the terminal if the old command is still loaded.[/success]")
     return result.returncode
 
 
@@ -519,25 +647,25 @@ def _search_url(source: str, query: str) -> str:
 def write_report(report: dict, output_path: str | None) -> int:
     rendered = json.dumps(report, ensure_ascii=False, indent=2)
     if not output_path:
-        print(rendered)
+        CONSOLE.print_json(data=report)
         return 0
     try:
         with open(output_path, "w", encoding="utf-8") as output_file:
             output_file.write(rendered + "\n")
     except OSError as error:
-        print(f"Could not write report: {error}", file=sys.stderr)
+        ERROR_CONSOLE.print(f"[error]Could not write report: {error}[/error]")
         return 1
-    print(f"Report saved to {output_path}")
+    CONSOLE.print(f"[success]Report saved to[/success] [path]{output_path}[/path]")
     return 0
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(
+    parser = ColorArgumentParser(
         description="Cross-platform OSINT toolkit for authorized research using public sources."
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument("--update", action="store_true", help="install the latest stable release from GitHub")
-    subparsers = parser.add_subparsers(dest="command")
+    subparsers = parser.add_subparsers(dest="command", parser_class=ColorArgumentParser)
     domain_parser = subparsers.add_parser("domain", help="Look up RDAP, DNS, and TLS certificate transparency")
     domain_parser.add_argument("target", type=valid_domain, help="domain under authorized investigation")
     domain_parser.add_argument("-o", "--output", help="write the JSON report to this path")
@@ -560,6 +688,15 @@ def main() -> int:
     phone_parser = subparsers.add_parser("phone", help="Validate an international phone number without identifying its owner")
     phone_parser.add_argument("number", help="international E.164 number, for example +14155552671")
     phone_parser.add_argument("-o", "--output", help="write the JSON report to this path")
+    config_parser = subparsers.add_parser("config", help="Configure secure API credentials")
+    config_actions = config_parser.add_subparsers(dest="config_action", required=True)
+    config_actions.add_parser("set-shodan-key", help="save a Shodan API key in the OS keyring")
+    config_actions.add_parser("remove-shodan-key", help="remove the stored Shodan API key")
+    config_actions.add_parser("status", help="show whether a Shodan API key is configured")
+    shodan_parser = subparsers.add_parser("shodan", help="Look up passive Shodan metadata for one public IP")
+    shodan_parser.add_argument("target", type=valid_public_ip, help="public IPv4 or IPv6 address")
+    shodan_parser.add_argument("--timeout", type=int, default=10, help="request timeout, in seconds (1-30)")
+    shodan_parser.add_argument("-o", "--output", help="write the JSON report to this path")
     args = parser.parse_args()
 
     if args.update:
@@ -567,8 +704,12 @@ def main() -> int:
     if args.command is None:
         parser.print_help()
         return 0
+    if args.command == "config":
+        return configure_shodan(args.config_action)
     if args.command in {"domain", "ip"} and not 1 <= args.timeout <= 60:
         parser.error("--timeout must be between 1 and 60 seconds")
+    if args.command == "shodan" and not 1 <= args.timeout <= 30:
+        parser.error("--timeout must be between 1 and 30 seconds")
     if args.command == "profiles" and not 1 <= args.timeout <= 30:
         parser.error("--timeout must be between 1 and 30 seconds")
     if args.command == "domain":
@@ -587,6 +728,12 @@ def main() -> int:
             parser.error(str(error))
     elif args.command == "profiles":
         report = build_profile_report(args.username, args.timeout)
+    elif args.command == "shodan":
+        api_key = get_shodan_api_key()
+        if not api_key:
+            ERROR_CONSOLE.print("[error]Shodan API key is not configured. Run `osint-kit config set-shodan-key`.[/error]")
+            return 2
+        report = build_shodan_report(args.target, api_key, args.timeout)
     else:
         if not args.target.strip():
             parser.error("search target cannot be empty")

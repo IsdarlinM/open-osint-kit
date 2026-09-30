@@ -21,7 +21,8 @@ if ($isVirtualEnvironment.Trim() -eq "1") {
     throw "Deactivate the virtual environment before installing the user command."
 }
 
-& $python @pythonArgs -m pip install --user --upgrade --force-reinstall $PSScriptRoot
+Write-Host "Installing Open OSINT Kit with verbose output..."
+& $python @pythonArgs -m pip install --user --upgrade --force-reinstall --verbose $PSScriptRoot
 if ($LASTEXITCODE -ne 0) {
     throw "Installation failed. Make sure pip is available, then try again."
 }

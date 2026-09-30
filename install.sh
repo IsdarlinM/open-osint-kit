@@ -15,11 +15,14 @@ base_python="$("$python_command" -c 'import sys; print(getattr(sys, "_base_execu
 install_root="${XDG_DATA_HOME:-$HOME/.local/share}/open-osint-kit"
 venv_dir="$install_root/venv"
 mkdir -p "$install_root"
+printf 'Creating the isolated runtime at %s...\n' "$venv_dir"
 "$base_python" -m venv "$venv_dir"
-"$venv_dir/bin/python" -m pip install --upgrade --force-reinstall "$script_dir"
+printf 'Installing Open OSINT Kit with verbose output...\n'
+"$venv_dir/bin/python" -m pip install --upgrade --force-reinstall --verbose "$script_dir"
 
 bin_dir="$HOME/.local/bin"
 mkdir -p "$bin_dir"
+printf 'Registering the user command and PATH...\n'
 printf '#!/usr/bin/env bash\nexec %q "$@"\n' "$venv_dir/bin/osint-kit" > "$bin_dir/osint-kit"
 chmod +x "$bin_dir/osint-kit"
 export PATH="$bin_dir:$PATH"
