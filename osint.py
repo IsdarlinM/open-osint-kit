@@ -18,7 +18,7 @@ from urllib.request import Request, urlopen
 import phonenumbers
 
 
-__version__ = "1.1.0"
+__version__ = "1.1.1"
 USER_AGENT = f"OpenOSINTKit/{__version__} (passive public-source research)"
 GITHUB_RELEASE_API = "https://api.github.com/repos/IsdarlinM/open-osint-kit/releases/latest"
 GITHUB_ARCHIVE_URL = "https://github.com/IsdarlinM/open-osint-kit/archive/refs/tags/{tag}.zip"

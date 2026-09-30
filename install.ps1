@@ -36,8 +36,9 @@ $pathEntries = @($userPath -split ";" | Where-Object { $_ })
 if (-not ($pathEntries | Where-Object { $_.TrimEnd("\") -ieq $scriptsPath.TrimEnd("\") })) {
     $newUserPath = (@($pathEntries) + $scriptsPath) -join ";"
     [Environment]::SetEnvironmentVariable("Path", $newUserPath, "User")
+    [Environment]::SetEnvironmentVariable("OPEN_OSINT_KIT_ADDED_PATH", $scriptsPath, "User")
 }
 $env:Path = "$scriptsPath;$env:Path"
 
 Write-Host "Instalado. Ejecuta: osint-kit --help"
-Write-Host "La ruta de usuario se añadió al PATH; abre una terminal nueva para que otras ventanas la hereden."
+Write-Host "Abre una terminal nueva para que el PATH actualizado se aplique a otras sesiones."

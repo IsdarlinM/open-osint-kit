@@ -1,4 +1,4 @@
-# Open OSINT Kit 1.1.0
+# Open OSINT Kit 1.1.1
 
 ![Open OSINT Kit: inteligencia de fuentes abiertas](assets/banner.svg)
 
@@ -35,6 +35,22 @@ En Linux, desde la raíz del workspace:
 bash Osint/install.sh
 osint-kit --help
 ```
+
+## Desinstalación
+
+En Windows, desde PowerShell y la raíz del workspace:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\Osint\uninstall.ps1
+```
+
+En Linux, desde la raíz del workspace:
+
+```bash
+bash Osint/uninstall.sh
+```
+
+El desinstalador elimina el paquete del usuario en Windows o el entorno virtual y el lanzador propios en Linux. No desinstala `phonenumbers` en Windows porque puede ser compartido por otros programas. Solo quita del PATH la entrada que un instalador reciente haya registrado como propia; las instalaciones anteriores a la versión 1.1.1 pueden dejar esa ruta compartida en el PATH. En ese caso, el desinstalador la conserva para no afectar otras herramientas; puedes quitarla manualmente tras comprobar que ninguna otra aplicación la utiliza.
 
 Los instaladores añaden la carpeta de ejecutables al PATH del usuario. En Linux, el programa queda aislado en un entorno virtual bajo `~/.local/share/open-osint-kit` y usa el intérprete base, incluso si lanzas el instalador desde otro entorno virtual. Abre una terminal nueva después de instalar para que el PATH actualizado se aplique a otras sesiones.
 

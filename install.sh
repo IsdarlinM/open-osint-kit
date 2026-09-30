@@ -33,6 +33,7 @@ printf -v escaped_bin_dir '%q' "$bin_dir"
 path_line="export PATH=$escaped_bin_dir:\$PATH"
 if [[ ! -f "$shell_config" ]] || ! grep -Fqx -- "$path_line" "$shell_config"; then
     printf '\n%s\n' "$path_line" >> "$shell_config"
+    printf '%s\n' "$shell_config" > "$install_root/path-config"
 fi
 
 printf 'Instalado. Ejecuta: osint-kit --help\n'
