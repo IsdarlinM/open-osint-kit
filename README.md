@@ -1,4 +1,4 @@
-# Open OSINT Kit 1.0.1
+# Open OSINT Kit 1.0.2
 
 ![Open OSINT Kit: inteligencia de fuentes abiertas](assets/banner.svg)
 
@@ -32,7 +32,7 @@ bash Osint/install.sh
 osint-kit --help
 ```
 
-Los instaladores añaden la carpeta de ejecutables al PATH del usuario. En Linux, el programa queda aislado en un entorno virtual bajo `~/.local/share/open-osint-kit`; así no modifica paquetes del sistema. Abre una terminal nueva después de instalar para que el PATH actualizado se aplique a otras sesiones.
+Los instaladores añaden la carpeta de ejecutables al PATH del usuario. En Linux, el programa queda aislado en un entorno virtual bajo `~/.local/share/open-osint-kit` y usa el intérprete base, incluso si lanzas el instalador desde otro entorno virtual. Abre una terminal nueva después de instalar para que el PATH actualizado se aplique a otras sesiones.
 
 ```powershell
 osint-kit domain example.org

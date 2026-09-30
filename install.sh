@@ -10,16 +10,12 @@ else
     printf '%s\n' "No se encontró Python 3.9+. Instálalo y vuelve a ejecutar este script." >&2
     exit 1
 fi
-
-if ! "$python_command" -c 'import sys; raise SystemExit(sys.prefix == sys.base_prefix)'; then
-    printf '%s\n' "Ejecuta el instalador con Python del sistema, no desde un entorno virtual." >&2
-    exit 1
-fi
+base_python="$("$python_command" -c 'import sys; print(getattr(sys, "_base_executable", sys.executable))')"
 
 install_root="${XDG_DATA_HOME:-$HOME/.local/share}/open-osint-kit"
 venv_dir="$install_root/venv"
 mkdir -p "$install_root"
-"$python_command" -m venv "$venv_dir"
+"$base_python" -m venv "$venv_dir"
 "$venv_dir/bin/python" -m pip install --upgrade --force-reinstall "$script_dir"
 
 bin_dir="$HOME/.local/bin"

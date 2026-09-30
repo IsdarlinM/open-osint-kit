@@ -15,7 +15,7 @@ from urllib.parse import quote, urlencode, urlsplit
 from urllib.request import Request, urlopen
 
 
-__version__ = "1.0.1"
+__version__ = "1.0.2"
 USER_AGENT = f"OpenOSINTKit/{__version__} (passive public-source research)"
 DNS_TYPES = ("A", "AAAA", "MX", "NS", "TXT", "CAA")
 
