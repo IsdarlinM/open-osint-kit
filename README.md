@@ -1,8 +1,6 @@
+# Open OSINT Kit 1.0.1
+
 ![Open OSINT Kit: inteligencia de fuentes abiertas](assets/banner.svg)
-
-# Open OSINT Kit
-
-**Versión 1.0.1**
 
 CLI multiplataforma en Python para investigaciones autorizadas de dominios, infraestructura e indicadores públicos. No necesita paquetes externos.
 
