@@ -66,6 +66,11 @@ if [[ "$purge_generated_data" == true ]]; then
             printf 'Removed generated artifact: %s\n' "$artifact"
         fi
     done
+    cache_dir="${XDG_CACHE_HOME:-$HOME/.cache}/open-osint-kit/shodan"
+    if [[ -d "$cache_dir" ]]; then
+        rm -rf -- "$cache_dir"
+        printf 'Removed Shodan cache: %s\n' "$cache_dir"
+    fi
 else
     printf 'Kept generated build artifacts and the Shodan key.\n'
 fi

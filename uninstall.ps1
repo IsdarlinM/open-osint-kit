@@ -32,6 +32,11 @@ if (-not [Console]::IsInputRedirected) {
                 Write-Host "Removed generated artifact: $artifactPath"
             }
         }
+        $cachePath = Join-Path $env:LOCALAPPDATA "open-osint-kit\shodan"
+        if (Test-Path $cachePath) {
+            Remove-Item -Recurse -Force $cachePath
+            Write-Host "Removed Shodan cache: $cachePath"
+        }
     } else {
         Write-Host "Kept generated artifacts and the Shodan key."
     }

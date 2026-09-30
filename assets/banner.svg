@@ -10,7 +10,7 @@
   <rect width="1200" height="360" rx="18" fill="url(#grid)"/>
   <path d="M0 304H1200" stroke="#d8e2d8" stroke-opacity=".12"/>
   <rect x="64" y="64" width="5" height="204" rx="2.5" fill="#f27b55"/>
-  <text x="92" y="91" fill="#b9c9bd" font-family="Consolas, 'Courier New', monospace" font-size="14" letter-spacing="2">OPEN OSINT KIT  /  RELEASE 1.5.0</text>
+  <text x="92" y="91" fill="#b9c9bd" font-family="Consolas, 'Courier New', monospace" font-size="14" letter-spacing="2">OPEN OSINT KIT  /  RELEASE 1.5.1</text>
   <text x="90" y="169" fill="#f3f2e9" font-family="Segoe UI, Arial, sans-serif" font-size="54" font-weight="700">Open-source</text>
   <text x="90" y="229" fill="#f3f2e9" font-family="Segoe UI, Arial, sans-serif" font-size="54" font-weight="700">intelligence.</text>
   <text x="92" y="275" fill="#a9b8ad" font-family="Segoe UI, Arial, sans-serif" font-size="18">Passive lookups. Clear reports. Responsible research.</text>
