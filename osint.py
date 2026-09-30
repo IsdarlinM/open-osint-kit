@@ -20,7 +20,7 @@ from urllib.request import Request, urlopen
 import phonenumbers
 
 
-__version__ = "1.2.0"
+__version__ = "1.3.0"
 USER_AGENT = f"OpenOSINTKit/{__version__} (passive public-source research)"
 GITHUB_RELEASE_API = "https://api.github.com/repos/IsdarlinM/open-osint-kit/releases/latest"
 GITHUB_ARCHIVE_URL = "https://github.com/IsdarlinM/open-osint-kit/archive/refs/tags/{tag}.zip"
@@ -238,30 +238,44 @@ def build_ioc_report(value: str) -> dict:
 
 def build_search_report(target: str, kind: str) -> dict:
     term = f'"{target.strip()}"'
-    queries = [
-        ("DuckDuckGo", term),
-        ("Google", term),
-        ("Bing", term),
-        ("GitHub", f'site:github.com {term}'),
-        ("Reddit", f'site:reddit.com {term}'),
-    ]
     if kind == "username":
-        queries.extend([
+        queries = [
+            ("Reddit", f'site:reddit.com {term}'),
+            ("GitHub", f'site:github.com {term}'),
             ("GitLab", f'site:gitlab.com {term}'),
+            ("HackerOne", f'site:hackerone.com/{target.strip()}'),
+            ("Bugcrowd", f'site:bugcrowd.com/{target.strip()}'),
+            ("TryHackMe", f'site:tryhackme.com/p/{target.strip()}'),
+            ("Hack The Box", f'site:app.hackthebox.com/profile/{target.strip()}'),
             ("LinkedIn", f'site:linkedin.com/in {term}'),
-        ])
+            ("Wellfound", f'site:wellfound.com/u/{target.strip()}'),
+            ("Indeed", f'site:indeed.com {term}'),
+            ("DuckDuckGo", term),
+            ("Google", term),
+            ("Bing", term),
+        ]
     elif kind in {"organization", "company"}:
-        queries.extend([
+        queries = [
+            ("DuckDuckGo", term),
+            ("Google", term),
+            ("Bing", term),
+            ("GitHub", f'site:github.com {term}'),
+            ("Reddit", f'site:reddit.com {term}'),
             ("LinkedIn", f'site:linkedin.com/company {term}'),
             ("OpenCorporates", f'site:opencorporates.com {term}'),
             ("Crunchbase", f'site:crunchbase.com/organization {term}'),
-        ])
+        ]
     else:
-        queries.extend([
+        queries = [
+            ("DuckDuckGo", term),
+            ("Google", term),
+            ("Bing", term),
+            ("GitHub", f'site:github.com {term}'),
+            ("Reddit", f'site:reddit.com {term}'),
             ("LinkedIn", f'site:linkedin.com/in {term}'),
             ("Google News", f'{term}'),
             ("Google Scholar", f'site:scholar.google.com {term}'),
-        ])
+        ]
     return {
         "target": target,
         "target_type": kind,
@@ -281,23 +295,24 @@ def valid_username(value: str) -> str:
     return username
 
 
-def probe_profile(service: str, profile_url: str, lookup: Callable[[], bool]) -> dict:
+def probe_profile(
+    service: str,
+    category: str,
+    profile_url: str,
+    lookup: Callable[[], bool],
+) -> dict | None:
     try:
         found = lookup()
-    except HTTPError as error:
-        if error.code == 404:
-            return {"service": service, "status": "not_found", "profile_url": profile_url}
-        return {
-            "service": service,
-            "status": "unavailable",
-            "http_status": error.code,
-            "profile_url": profile_url,
-        }
+    except HTTPError:
+        return None
     except (URLError, TimeoutError, OSError, ValueError, TypeError, AttributeError):
-        return {"service": service, "status": "unavailable", "profile_url": profile_url}
+        return None
+    if not found:
+        return None
     return {
         "service": service,
-        "status": "found" if found else "not_found",
+        "category": category,
+        "status": "confirmed",
         "profile_url": profile_url,
     }
 
@@ -308,6 +323,7 @@ def build_profile_report(username: str, timeout: int) -> dict:
     profiles = [
         (
             "GitHub",
+            "developer / cybersecurity",
             f"https://github.com/{encoded_username}",
             f"https://api.github.com/users/{encoded_username}",
             lambda data: isinstance(data, dict)
@@ -315,6 +331,7 @@ def build_profile_report(username: str, timeout: int) -> dict:
         ),
         (
             "GitLab",
+            "developer / cybersecurity",
             f"https://gitlab.com/{encoded_username}",
             "https://gitlab.com/api/v4/users?" + urlencode({"username": username}),
             lambda data: isinstance(data, list)
@@ -326,6 +343,7 @@ def build_profile_report(username: str, timeout: int) -> dict:
         ),
         (
             "DEV Community",
+            "developer community",
             f"https://dev.to/{encoded_username}",
             "https://dev.to/api/users/by_username?" + urlencode({"url": username}),
             lambda data: isinstance(data, dict)
@@ -333,6 +351,7 @@ def build_profile_report(username: str, timeout: int) -> dict:
         ),
         (
             "Hacker News",
+            "technology forum",
             f"https://news.ycombinator.com/user?id={encoded_username}",
             f"https://hacker-news.firebaseio.com/v0/user/{encoded_username}.json",
             lambda data: isinstance(data, dict)
@@ -340,10 +359,45 @@ def build_profile_report(username: str, timeout: int) -> dict:
         ),
         (
             "Bluesky",
+            "social network",
             f"https://bsky.app/profile/{quote(bluesky_handle, safe='')}",
             "https://public.api.bsky.app/xrpc/com.atproto.identity.resolveHandle?"
             + urlencode({"handle": bluesky_handle}),
             lambda data: isinstance(data, dict) and bool(data.get("did")),
+        ),
+        (
+            "Reddit",
+            "social network / forums / cybersecurity",
+            f"https://www.reddit.com/user/{encoded_username}/",
+            f"https://www.reddit.com/user/{encoded_username}/about.json",
+            lambda data: isinstance(data, dict)
+            and data.get("kind") == "t2"
+            and isinstance(data.get("data"), dict)
+            and str(data["data"].get("name", "")).casefold() == username.casefold(),
+        ),
+        (
+            "Mastodon.social",
+            "social network",
+            f"https://mastodon.social/@{encoded_username}",
+            "https://mastodon.social/api/v1/accounts/lookup?" + urlencode({"acct": username}),
+            lambda data: isinstance(data, dict)
+            and str(data.get("username", "")).casefold() == username.casefold(),
+        ),
+        (
+            "Codeberg",
+            "developer / cybersecurity",
+            f"https://codeberg.org/{encoded_username}",
+            f"https://codeberg.org/api/v1/users/{encoded_username}",
+            lambda data: isinstance(data, dict)
+            and str(data.get("login", data.get("username", ""))).casefold() == username.casefold(),
+        ),
+        (
+            "Hugging Face",
+            "developer / AI",
+            f"https://huggingface.co/{encoded_username}",
+            f"https://huggingface.co/api/users/{encoded_username}",
+            lambda data: isinstance(data, dict)
+            and str(data.get("user", data.get("username", ""))).casefold() == username.casefold(),
         ),
     ]
 
@@ -353,27 +407,37 @@ def build_profile_report(username: str, timeout: int) -> dict:
             executor.submit(
                 probe_profile,
                 service,
+                category,
                 profile_url,
                 lambda api_url=api_url, matches=matches: matches(fetch_json(api_url, timeout)),
             ): service
-            for service, profile_url, api_url, matches in profiles
+            for service, category, profile_url, api_url, matches in profiles
         }
         for future in as_completed(futures):
             results[futures[future]] = future.result()
 
-    profile_results = [results[service] for service, _, _, _ in profiles]
+    profile_results = [
+        results[service]
+        for service, _, _, _, _ in profiles
+        if results.get(service) is not None
+    ]
+    category_priority = {
+        "social network / forums / cybersecurity": 0,
+        "social network": 1,
+        "technology forum": 2,
+        "developer community": 3,
+        "developer / cybersecurity": 4,
+        "developer / AI": 5,
+    }
+    profile_results.sort(key=lambda item: category_priority.get(item["category"], 99))
     return {
         "target": username,
         "target_type": "username",
         "generated_at": datetime.now(timezone.utc).isoformat(),
-        "mode": "public profile presence checks only; profile content is not stored",
+        "mode": "public profile existence checks; only exact confirmed matches are displayed",
         "results": profile_results,
-        "summary": {
-            "found": sum(item["status"] == "found" for item in profile_results),
-            "not_found": sum(item["status"] == "not_found" for item in profile_results),
-            "unavailable": sum(item["status"] == "unavailable" for item in profile_results),
-        },
-        "notice": "a matching username does not prove that profiles belong to the same person",
+        "summary": {"confirmed": len(profile_results)},
+        "notice": "profiles without an exact match or with unavailable APIs are omitted; a username match does not prove shared ownership",
     }
 
 
