@@ -8,16 +8,35 @@ import base64
 import ipaddress
 import json
 import re
+import subprocess
 import sys
 from datetime import datetime, timezone
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode, urlsplit
 from urllib.request import Request, urlopen
 
+import phonenumbers
 
-__version__ = "1.0.2"
+
+__version__ = "1.1.0"
 USER_AGENT = f"OpenOSINTKit/{__version__} (passive public-source research)"
+GITHUB_RELEASE_API = "https://api.github.com/repos/IsdarlinM/open-osint-kit/releases/latest"
+GITHUB_ARCHIVE_URL = "https://github.com/IsdarlinM/open-osint-kit/archive/refs/tags/{tag}.zip"
 DNS_TYPES = ("A", "AAAA", "MX", "NS", "TXT", "CAA")
+PHONE_NUMBER_TYPES = {
+    phonenumbers.PhoneNumberType.FIXED_LINE: "fixed_line",
+    phonenumbers.PhoneNumberType.MOBILE: "mobile",
+    phonenumbers.PhoneNumberType.FIXED_LINE_OR_MOBILE: "fixed_line_or_mobile",
+    phonenumbers.PhoneNumberType.TOLL_FREE: "toll_free",
+    phonenumbers.PhoneNumberType.PREMIUM_RATE: "premium_rate",
+    phonenumbers.PhoneNumberType.SHARED_COST: "shared_cost",
+    phonenumbers.PhoneNumberType.VOIP: "voip",
+    phonenumbers.PhoneNumberType.PERSONAL_NUMBER: "personal_number",
+    phonenumbers.PhoneNumberType.PAGER: "pager",
+    phonenumbers.PhoneNumberType.UAN: "uan",
+    phonenumbers.PhoneNumberType.VOICEMAIL: "voicemail",
+    phonenumbers.PhoneNumberType.UNKNOWN: "unknown",
+}
 
 
 def fetch_json(url: str, timeout: int) -> object:
@@ -229,20 +248,94 @@ def build_search_report(target: str, kind: str) -> dict:
             ("GitLab", f'site:gitlab.com {term}'),
             ("LinkedIn", f'site:linkedin.com/in {term}'),
         ])
-    else:
+    elif kind in {"organization", "company"}:
         queries.extend([
             ("LinkedIn", f'site:linkedin.com/company {term}'),
             ("OpenCorporates", f'site:opencorporates.com {term}'),
+            ("Crunchbase", f'site:crunchbase.com/organization {term}'),
+        ])
+    else:
+        queries.extend([
+            ("LinkedIn", f'site:linkedin.com/in {term}'),
+            ("Google News", f'{term}'),
+            ("Google Scholar", f'site:scholar.google.com {term}'),
         ])
     return {
         "target": target,
         "target_type": kind,
-        "mode": "manual search links; no search is performed automatically",
+        "mode": "manual search links; no search is performed and no identity is verified",
+        "privacy_scope": "public sources only; no private contact details or sensitive personal records are collected",
         "searches": [
             {"source": source, "query": query, "url": "https://www.google.com/search?" + urlencode({"q": query}) if source not in {"DuckDuckGo", "Google", "Bing"} else _search_url(source, query)}
             for source, query in queries
         ],
     }
+
+
+def build_phone_report(value: str) -> dict:
+    if not value.strip().startswith("+"):
+        raise argparse.ArgumentTypeError("usa formato internacional E.164, por ejemplo +14155552671")
+    try:
+        number = phonenumbers.parse(value, None)
+    except phonenumbers.NumberParseException as error:
+        raise argparse.ArgumentTypeError(f"número telefónico no válido: {error}") from error
+    if not phonenumbers.is_possible_number(number) or not phonenumbers.is_valid_number(number):
+        raise argparse.ArgumentTypeError("el número no es válido según el plan telefónico")
+
+    number_type = phonenumbers.number_type(number)
+    return {
+        "target_type": "phone_number",
+        "e164": phonenumbers.format_number(number, phonenumbers.PhoneNumberFormat.E164),
+        "international": phonenumbers.format_number(number, phonenumbers.PhoneNumberFormat.INTERNATIONAL),
+        "country_calling_code": number.country_code,
+        "region_code": phonenumbers.region_code_for_number(number),
+        "number_type": PHONE_NUMBER_TYPES.get(number_type, "unknown"),
+        "mode": "local numbering-plan validation; no owner lookup or contact is made",
+        "notice": "validity does not confirm that the number is assigned, active, or belongs to a person",
+    }
+
+
+def release_version(value: str) -> tuple[int, int, int] | None:
+    match = re.fullmatch(r"v(\d+)\.(\d+)\.(\d+)", value)
+    if not match:
+        return None
+    return tuple(int(part) for part in match.groups())
+
+
+def update_application() -> int:
+    try:
+        release = fetch_json(GITHUB_RELEASE_API, 15)
+    except (HTTPError, URLError, TimeoutError, OSError, ValueError) as error:
+        print(f"No se pudo consultar GitHub: {error}", file=sys.stderr)
+        return 1
+    if not isinstance(release, dict) or not isinstance(release.get("tag_name"), str):
+        print("GitHub devolvió información de release no válida.", file=sys.stderr)
+        return 1
+
+    tag = release["tag_name"]
+    latest_version = release_version(tag)
+    current_version = release_version(f"v{__version__}")
+    if latest_version is None or current_version is None:
+        print(f"Versión de release no reconocida: {tag}", file=sys.stderr)
+        return 1
+    if latest_version <= current_version:
+        print(f"Ya tienes la última versión estable ({__version__}).")
+        return 0
+
+    archive_url = GITHUB_ARCHIVE_URL.format(tag=quote(tag, safe=""))
+    command = [sys.executable, "-m", "pip", "install", "--upgrade", "--force-reinstall"]
+    if sys.prefix == sys.base_prefix:
+        command.append("--user")
+    command.append(archive_url)
+    print(f"Actualizando {__version__} a {tag} desde GitHub...")
+    try:
+        result = subprocess.run(command, check=False)
+    except OSError as error:
+        print(f"No se pudo iniciar pip: {error}", file=sys.stderr)
+        return 1
+    if result.returncode == 0:
+        print("Actualización completada. Cierra y vuelve a abrir la terminal si el comando sigue cargado.")
+    return result.returncode
 
 
 def _search_url(source: str, query: str) -> str:
@@ -274,7 +367,8 @@ def main() -> int:
         description="Kit OSINT multiplataforma para consultas autorizadas a fuentes públicas."
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
-    subparsers = parser.add_subparsers(dest="command", required=True)
+    parser.add_argument("--update", action="store_true", help="instalar el último release estable desde GitHub")
+    subparsers = parser.add_subparsers(dest="command")
     domain_parser = subparsers.add_parser("domain", help="Consultar RDAP, DNS y transparencia TLS")
     domain_parser.add_argument("target", type=valid_domain, help="dominio bajo investigación autorizada")
     domain_parser.add_argument("-o", "--output", help="guardar el informe JSON en esta ruta")
@@ -288,10 +382,18 @@ def main() -> int:
     ioc_parser.add_argument("-o", "--output", help="guardar el informe JSON en esta ruta")
     search_parser = subparsers.add_parser("search", help="Generar enlaces para búsquedas manuales")
     search_parser.add_argument("target", help="nombre de usuario u organización")
-    search_parser.add_argument("--kind", choices=("username", "organization"), required=True)
+    search_parser.add_argument("--kind", choices=("username", "person", "organization", "company"), required=True)
     search_parser.add_argument("-o", "--output", help="guardar el informe JSON en esta ruta")
+    phone_parser = subparsers.add_parser("phone", help="Validar un teléfono internacional sin buscar a su titular")
+    phone_parser.add_argument("number", help="número internacional E.164, por ejemplo +14155552671")
+    phone_parser.add_argument("-o", "--output", help="guardar el informe JSON en esta ruta")
     args = parser.parse_args()
 
+    if args.update:
+        return update_application()
+    if args.command is None:
+        parser.print_help()
+        return 0
     if args.command in {"domain", "ip"} and not 1 <= args.timeout <= 60:
         parser.error("--timeout debe estar entre 1 y 60 segundos")
     if args.command == "domain":
@@ -301,6 +403,11 @@ def main() -> int:
     elif args.command == "ioc":
         try:
             report = build_ioc_report(args.indicator)
+        except argparse.ArgumentTypeError as error:
+            parser.error(str(error))
+    elif args.command == "phone":
+        try:
+            report = build_phone_report(args.number)
         except argparse.ArgumentTypeError as error:
             parser.error(str(error))
     else:
