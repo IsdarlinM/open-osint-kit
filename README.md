@@ -1,76 +1,81 @@
-# Open OSINT Kit 1.1.1
+# Open OSINT Kit 1.2.0
 
-![Open OSINT Kit: inteligencia de fuentes abiertas](assets/banner.svg)
+![Open OSINT Kit: open-source intelligence](assets/banner.svg)
 
-CLI multiplataforma en Python para investigaciones autorizadas de dominios, infraestructura e indicadores públicos. El análisis telefónico usa la biblioteca de numeración `phonenumbers`.
+Cross-platform Python CLI for authorized research into domains, infrastructure, and public indicators. Phone-number analysis uses the `phonenumbers` library.
 
-## Módulos
+## Features
 
-`domain` reúne RDAP, DNS (A, AAAA, MX, NS, TXT y CAA) vía DNS-over-HTTPS, y certificados de Certificate Transparency. Cada fuente falla de forma independiente.
+`domain` gathers RDAP, DNS (A, AAAA, MX, NS, TXT, and CAA) over DNS-over-HTTPS, and Certificate Transparency records. Each source fails independently.
 
-`ip` consulta RDAP y DNS inverso para una dirección pública. Las IP privadas, locales y reservadas se rechazan.
+`ip` checks RDAP and reverse DNS for a public address. Private, local, and reserved IP addresses are rejected.
 
-`ioc` clasifica dominios, IP, URLs HTTP(S) y hashes MD5/SHA1/SHA256, y genera enlaces a servicios públicos como VirusTotal, AlienVault OTX, URLhaus, AbuseIPDB y CIRCL Hashlookup. No envía el indicador automáticamente.
+`ioc` classifies domains, IP addresses, HTTP(S) URLs, and MD5/SHA1/SHA256 hashes, then generates links to public services such as VirusTotal, AlienVault OTX, URLhaus, AbuseIPDB, and CIRCL Hashlookup. Indicators are not submitted automatically.
 
-`search` genera enlaces manuales para nombres de usuario, personas y empresas/organizaciones. No rastrea perfiles, recopila resultados ni confirma identidades.
+`search` generates manual search links for usernames, people, companies, and organizations. It does not scrape profiles, collect search results, or verify identities.
 
-`phone` valida números en formato internacional E.164 y muestra formato, región del plan telefónico y tipo de línea. No consulta operadores, no busca titulares ni confirma que la línea esté activa.
+`profiles` checks one username against public APIs for GitHub, GitLab, DEV Community, Hacker News, and Bluesky. It reports only `found`, `not_found`, or `unavailable` plus the public profile URL; profile details are discarded. For Bluesky, a username without a domain is checked as `<username>.bsky.social`.
 
-`--update` consulta el último release estable de este repositorio y, si existe una versión más reciente, la instala con `pip` desde el archivo fuente del tag publicado.
+`phone` validates an international E.164 number and reports its formatting, numbering-plan region, and line type. It does not query carriers, identify owners, or verify that a line is active.
 
-## Instalación
+`--update` checks this repository's latest stable release and, when a newer version is available, installs the source archive for that release tag with `pip`.
 
-Requiere Python 3.9 o posterior y `pip`; la primera instalación necesita conexión a Internet para resolver dependencias y el backend de construcción. La instalación es para el usuario actual y no necesita privilegios de administrador.
+## Installation
 
-En Windows, desde la raíz del workspace:
+Requires Python 3.9 or later and `pip`. The first installation needs an internet connection to resolve dependencies and the build backend. Installation is per-user and does not require administrator privileges.
+
+On Windows, run from the repository root:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\Osint\install.ps1
+powershell -ExecutionPolicy Bypass -File .\install.ps1
 osint-kit --help
 ```
 
-En Linux, desde la raíz del workspace:
+On Linux, run from the repository root:
 
 ```bash
-bash Osint/install.sh
+bash ./install.sh
 osint-kit --help
 ```
 
-## Desinstalación
+The installers add the command directory to the user's PATH. On Linux, the application runs in an isolated virtual environment under `~/.local/share/open-osint-kit` and uses the base Python interpreter, even when the installer is launched from another virtual environment. Open a new terminal after installation to apply the updated PATH to other sessions.
 
-En Windows, desde PowerShell y la raíz del workspace:
+## Uninstallation
+
+On Windows, run from PowerShell and the repository root:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\Osint\uninstall.ps1
+powershell -ExecutionPolicy Bypass -File .\uninstall.ps1
 ```
 
-En Linux, desde la raíz del workspace:
+On Linux, run from the repository root:
 
 ```bash
-bash Osint/uninstall.sh
+bash ./uninstall.sh
 ```
 
-El desinstalador elimina el paquete del usuario en Windows o el entorno virtual y el lanzador propios en Linux. No desinstala `phonenumbers` en Windows porque puede ser compartido por otros programas. Solo quita del PATH la entrada que un instalador reciente haya registrado como propia; las instalaciones anteriores a la versión 1.1.1 pueden dejar esa ruta compartida en el PATH. En ese caso, el desinstalador la conserva para no afectar otras herramientas; puedes quitarla manualmente tras comprobar que ninguna otra aplicación la utiliza.
+The uninstaller removes the per-user package on Windows or the kit's virtual environment and launcher on Linux. It does not uninstall `phonenumbers` on Windows because other applications may use it. It removes a PATH entry only when a recent installer recorded that it added the entry. Installations older than 1.1.1 may leave a shared PATH entry; in that case, it is preserved to avoid affecting other tools. Remove it manually only after confirming that no other application uses it.
 
-Los instaladores añaden la carpeta de ejecutables al PATH del usuario. En Linux, el programa queda aislado en un entorno virtual bajo `~/.local/share/open-osint-kit` y usa el intérprete base, incluso si lanzas el instalador desde otro entorno virtual. Abre una terminal nueva después de instalar para que el PATH actualizado se aplique a otras sesiones.
+## Usage
 
-```powershell
+```text
 osint-kit --update
 osint-kit --version
 osint-kit domain example.org
-osint-kit domain example.org --output informe.json
-osint-kit ip 8.8.8.8 --output ip.json
+osint-kit domain example.org --output domain-report.json
+osint-kit ip 8.8.8.8 --output ip-report.json
 osint-kit ioc example.org
 osint-kit ioc 44d88612fea8a8f36de82e1278abb02f
-osint-kit search ejemplo --kind organization
-osint-kit search ejemplo_user --kind username --output busqueda.json
-osint-kit search "Nombre Apellido" --kind person
-osint-kit search "Ejemplo SA" --kind company
+osint-kit search ExampleOrg --kind organization
+osint-kit search example_user --kind username --output search.json
+osint-kit search "Jane Example" --kind person
+osint-kit search "Example Inc" --kind company
+osint-kit profiles example_user --timeout 5 --output profiles.json
 osint-kit phone +14155552671
 ```
 
-`domain`, `ip` y `--update` requieren conexión a Internet. `ioc` y `search` solo generan enlaces; `phone` analiza localmente los metadatos del plan de numeración. El timeout de `domain` e `ip` aplica por fuente, por lo que la ejecución completa puede tardar más que ese valor.
+`domain`, `ip`, `profiles`, and `--update` require an internet connection. `ioc` and `search` only generate links; `phone` analyzes numbering-plan metadata locally. The `domain` and `ip` timeouts apply per source, so a full run may take longer than the configured timeout.
 
-## Uso responsable
+## Responsible Use
 
-Usa el kit solo en investigaciones legítimas y autorizadas. No escanea puertos, no intenta autenticarse ni explota sistemas. `search` muestra enlaces que el usuario decide abrir y limita su alcance a fuentes públicas/profesionales; `phone` no identifica a su titular. No uses la herramienta para localizar personas, recopilar domicilios, datos privados, familiares o información sensible. No incluyas URLs con query string: se rechazan para reducir el riesgo de exponer tokens o secretos. Los datos públicos pueden ser incompletos, antiguos o estar sujetos a términos de uso; verifica los hallazgos antes de tomar decisiones.
+Use the kit only for legitimate, authorized research. It does not scan ports, authenticate, or exploit systems. `search` provides links that the user chooses whether to open and is limited to public/professional sources; `profiles` sends the supplied username to the five listed public APIs and does not retain profile details. A match does not prove that accounts belong to the same person. `phone` does not identify the owner. Do not use the tool to locate people or collect home addresses, private data, family details, or sensitive information. URLs with query strings are rejected to reduce the risk of exposing tokens or secrets. Public data may be incomplete, outdated, or subject to terms of use; verify findings before relying on them.

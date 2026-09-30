@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 360" role="img" aria-labelledby="title description">
   <title id="title">Open OSINT Kit</title>
-  <desc id="description">Kit de inteligencia de fuentes abiertas con consultas pasivas e informes claros.</desc>
+  <desc id="description">Open-source intelligence toolkit for passive research and clear reporting.</desc>
   <defs>
     <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
       <path d="M40 0H0V40" fill="none" stroke="#d8e2d8" stroke-opacity=".055" stroke-width="1"/>
@@ -10,10 +10,10 @@
   <rect width="1200" height="360" rx="18" fill="url(#grid)"/>
   <path d="M0 304H1200" stroke="#d8e2d8" stroke-opacity=".12"/>
   <rect x="64" y="64" width="5" height="204" rx="2.5" fill="#f27b55"/>
-  <text x="92" y="91" fill="#b9c9bd" font-family="Consolas, 'Courier New', monospace" font-size="14" letter-spacing="2">OPEN OSINT KIT  /  RELEASE 1.0.1</text>
-  <text x="90" y="169" fill="#f3f2e9" font-family="Segoe UI, Arial, sans-serif" font-size="54" font-weight="700">Inteligencia</text>
-  <text x="90" y="229" fill="#f3f2e9" font-family="Segoe UI, Arial, sans-serif" font-size="54" font-weight="700">de fuentes abiertas.</text>
-  <text x="92" y="275" fill="#a9b8ad" font-family="Segoe UI, Arial, sans-serif" font-size="18">Consultas pasivas. Informes claros. Investigación responsable.</text>
+  <text x="92" y="91" fill="#b9c9bd" font-family="Consolas, 'Courier New', monospace" font-size="14" letter-spacing="2">OPEN OSINT KIT  /  RELEASE 1.2.0</text>
+  <text x="90" y="169" fill="#f3f2e9" font-family="Segoe UI, Arial, sans-serif" font-size="54" font-weight="700">Open-source</text>
+  <text x="90" y="229" fill="#f3f2e9" font-family="Segoe UI, Arial, sans-serif" font-size="54" font-weight="700">intelligence.</text>
+  <text x="92" y="275" fill="#a9b8ad" font-family="Segoe UI, Arial, sans-serif" font-size="18">Passive lookups. Clear reports. Responsible research.</text>
   <g fill="none" stroke="#8db5a0" stroke-width="1.5" opacity=".75">
     <circle cx="965" cy="174" r="117" stroke-opacity=".3"/>
     <circle cx="965" cy="174" r="82" stroke-opacity=".45"/>

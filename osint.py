@@ -10,6 +10,8 @@ import json
 import re
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from collections.abc import Callable
 from datetime import datetime, timezone
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode, urlsplit
@@ -18,7 +20,7 @@ from urllib.request import Request, urlopen
 import phonenumbers
 
 
-__version__ = "1.1.1"
+__version__ = "1.2.0"
 USER_AGENT = f"OpenOSINTKit/{__version__} (passive public-source research)"
 GITHUB_RELEASE_API = "https://api.github.com/repos/IsdarlinM/open-osint-kit/releases/latest"
 GITHUB_ARCHIVE_URL = "https://github.com/IsdarlinM/open-osint-kit/archive/refs/tags/{tag}.zip"
@@ -49,11 +51,11 @@ def valid_domain(value: str) -> str:
     try:
         domain = value.strip().rstrip(".").encode("idna").decode("ascii").lower()
     except UnicodeError as error:
-        raise argparse.ArgumentTypeError("el dominio no tiene un formato IDN válido") from error
+        raise argparse.ArgumentTypeError("invalid IDN domain format") from error
     labels = domain.split(".")
     label_pattern = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
     if len(labels) < 2 or len(domain) > 253 or any(not label_pattern.fullmatch(label) for label in labels):
-        raise argparse.ArgumentTypeError("indica un dominio válido, por ejemplo example.org")
+        raise argparse.ArgumentTypeError("enter a valid domain, such as example.org")
     return domain
 
 
@@ -61,9 +63,9 @@ def valid_public_ip(value: str) -> str:
     try:
         address = ipaddress.ip_address(value)
     except ValueError as error:
-        raise argparse.ArgumentTypeError("indica una dirección IPv4 o IPv6 válida") from error
+        raise argparse.ArgumentTypeError("enter a valid IPv4 or IPv6 address") from error
     if not address.is_global:
-        raise argparse.ArgumentTypeError("solo se admiten direcciones IP públicas")
+        raise argparse.ArgumentTypeError("only public IP addresses are supported")
     return str(address)
 
 
@@ -170,7 +172,7 @@ def classify_indicator(value: str) -> tuple[str, str]:
     try:
         address = ipaddress.ip_address(value)
         if not address.is_global:
-            raise argparse.ArgumentTypeError("no se permiten indicadores IP privados o reservados")
+            raise argparse.ArgumentTypeError("private or reserved IP indicators are not allowed")
         return "ip", str(address)
     except ValueError:
         pass
@@ -178,13 +180,13 @@ def classify_indicator(value: str) -> tuple[str, str]:
     try:
         parsed = urlsplit(value)
     except ValueError as error:
-        raise argparse.ArgumentTypeError("la URL no tiene un formato válido") from error
+        raise argparse.ArgumentTypeError("invalid URL format") from error
     if parsed.scheme.lower() in {"http", "https"} and parsed.hostname:
         if parsed.username or parsed.password:
-            raise argparse.ArgumentTypeError("quita las credenciales de la URL antes de consultarla")
+            raise argparse.ArgumentTypeError("remove URL credentials before using this indicator")
         if parsed.query:
             raise argparse.ArgumentTypeError(
-                "la URL contiene parámetros; elimina posibles tokens o secretos antes de compartirla"
+                "URL query parameters are not allowed; remove potential tokens or secrets first"
             )
         try:
             url_address = ipaddress.ip_address(parsed.hostname)
@@ -192,13 +194,13 @@ def classify_indicator(value: str) -> tuple[str, str]:
             pass
         else:
             if not url_address.is_global:
-                raise argparse.ArgumentTypeError("la URL contiene una IP privada o reservada")
+                raise argparse.ArgumentTypeError("URLs containing private or reserved IP addresses are not allowed")
         return "url", value
     try:
         return "domain", valid_domain(value)
     except argparse.ArgumentTypeError as error:
         raise argparse.ArgumentTypeError(
-            "el indicador debe ser un dominio, una IP, una URL HTTP(S) o un hash MD5/SHA1/SHA256"
+            "indicator must be a domain, IP address, HTTP(S) URL, or MD5/SHA1/SHA256 hash"
         ) from error
 
 
@@ -272,15 +274,118 @@ def build_search_report(target: str, kind: str) -> dict:
     }
 
 
+def valid_username(value: str) -> str:
+    username = value.strip()
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,62}", username):
+        raise argparse.ArgumentTypeError("enter a username containing 1-63 letters, digits, dots, underscores, or hyphens")
+    return username
+
+
+def probe_profile(service: str, profile_url: str, lookup: Callable[[], bool]) -> dict:
+    try:
+        found = lookup()
+    except HTTPError as error:
+        if error.code == 404:
+            return {"service": service, "status": "not_found", "profile_url": profile_url}
+        return {
+            "service": service,
+            "status": "unavailable",
+            "http_status": error.code,
+            "profile_url": profile_url,
+        }
+    except (URLError, TimeoutError, OSError, ValueError, TypeError, AttributeError):
+        return {"service": service, "status": "unavailable", "profile_url": profile_url}
+    return {
+        "service": service,
+        "status": "found" if found else "not_found",
+        "profile_url": profile_url,
+    }
+
+
+def build_profile_report(username: str, timeout: int) -> dict:
+    encoded_username = quote(username, safe="")
+    bluesky_handle = username if "." in username else f"{username}.bsky.social"
+    profiles = [
+        (
+            "GitHub",
+            f"https://github.com/{encoded_username}",
+            f"https://api.github.com/users/{encoded_username}",
+            lambda data: isinstance(data, dict)
+            and str(data.get("login", "")).casefold() == username.casefold(),
+        ),
+        (
+            "GitLab",
+            f"https://gitlab.com/{encoded_username}",
+            "https://gitlab.com/api/v4/users?" + urlencode({"username": username}),
+            lambda data: isinstance(data, list)
+            and any(
+                isinstance(item, dict)
+                and str(item.get("username", "")).casefold() == username.casefold()
+                for item in data
+            ),
+        ),
+        (
+            "DEV Community",
+            f"https://dev.to/{encoded_username}",
+            "https://dev.to/api/users/by_username?" + urlencode({"url": username}),
+            lambda data: isinstance(data, dict)
+            and str(data.get("username", "")).casefold() == username.casefold(),
+        ),
+        (
+            "Hacker News",
+            f"https://news.ycombinator.com/user?id={encoded_username}",
+            f"https://hacker-news.firebaseio.com/v0/user/{encoded_username}.json",
+            lambda data: isinstance(data, dict)
+            and str(data.get("id", "")).casefold() == username.casefold(),
+        ),
+        (
+            "Bluesky",
+            f"https://bsky.app/profile/{quote(bluesky_handle, safe='')}",
+            "https://public.api.bsky.app/xrpc/com.atproto.identity.resolveHandle?"
+            + urlencode({"handle": bluesky_handle}),
+            lambda data: isinstance(data, dict) and bool(data.get("did")),
+        ),
+    ]
+
+    results = {}
+    with ThreadPoolExecutor(max_workers=len(profiles)) as executor:
+        futures = {
+            executor.submit(
+                probe_profile,
+                service,
+                profile_url,
+                lambda api_url=api_url, matches=matches: matches(fetch_json(api_url, timeout)),
+            ): service
+            for service, profile_url, api_url, matches in profiles
+        }
+        for future in as_completed(futures):
+            results[futures[future]] = future.result()
+
+    profile_results = [results[service] for service, _, _, _ in profiles]
+    return {
+        "target": username,
+        "target_type": "username",
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "mode": "public profile presence checks only; profile content is not stored",
+        "results": profile_results,
+        "summary": {
+            "found": sum(item["status"] == "found" for item in profile_results),
+            "not_found": sum(item["status"] == "not_found" for item in profile_results),
+            "unavailable": sum(item["status"] == "unavailable" for item in profile_results),
+        },
+        "notice": "a matching username does not prove that profiles belong to the same person",
+    }
+
+
 def build_phone_report(value: str) -> dict:
     if not value.strip().startswith("+"):
-        raise argparse.ArgumentTypeError("usa formato internacional E.164, por ejemplo +14155552671")
+        raise argparse.ArgumentTypeError("use international E.164 format, for example +14155552671")
     try:
         number = phonenumbers.parse(value, None)
     except phonenumbers.NumberParseException as error:
-        raise argparse.ArgumentTypeError(f"número telefónico no válido: {error}") from error
+        raise argparse.ArgumentTypeError(f"invalid phone number: {error}") from error
     if not phonenumbers.is_possible_number(number) or not phonenumbers.is_valid_number(number):
-        raise argparse.ArgumentTypeError("el número no es válido según el plan telefónico")
+        raise argparse.ArgumentTypeError("the number is not valid under the numbering plan")
 
     number_type = phonenumbers.number_type(number)
     return {
@@ -306,20 +411,20 @@ def update_application() -> int:
     try:
         release = fetch_json(GITHUB_RELEASE_API, 15)
     except (HTTPError, URLError, TimeoutError, OSError, ValueError) as error:
-        print(f"No se pudo consultar GitHub: {error}", file=sys.stderr)
+        print(f"Could not check GitHub for updates: {error}", file=sys.stderr)
         return 1
     if not isinstance(release, dict) or not isinstance(release.get("tag_name"), str):
-        print("GitHub devolvió información de release no válida.", file=sys.stderr)
+        print("GitHub returned invalid release information.", file=sys.stderr)
         return 1
 
     tag = release["tag_name"]
     latest_version = release_version(tag)
     current_version = release_version(f"v{__version__}")
     if latest_version is None or current_version is None:
-        print(f"Versión de release no reconocida: {tag}", file=sys.stderr)
+        print(f"Unrecognized release version: {tag}", file=sys.stderr)
         return 1
     if latest_version <= current_version:
-        print(f"Ya tienes la última versión estable ({__version__}).")
+        print(f"You already have the latest stable version ({__version__}).")
         return 0
 
     archive_url = GITHUB_ARCHIVE_URL.format(tag=quote(tag, safe=""))
@@ -327,14 +432,14 @@ def update_application() -> int:
     if sys.prefix == sys.base_prefix:
         command.append("--user")
     command.append(archive_url)
-    print(f"Actualizando {__version__} a {tag} desde GitHub...")
+    print(f"Updating from {__version__} to {tag} via GitHub...")
     try:
         result = subprocess.run(command, check=False)
     except OSError as error:
-        print(f"No se pudo iniciar pip: {error}", file=sys.stderr)
+        print(f"Could not start pip: {error}", file=sys.stderr)
         return 1
     if result.returncode == 0:
-        print("Actualización completada. Cierra y vuelve a abrir la terminal si el comando sigue cargado.")
+        print("Update complete. Restart the terminal if the old command is still loaded.")
     return result.returncode
 
 
@@ -356,37 +461,41 @@ def write_report(report: dict, output_path: str | None) -> int:
         with open(output_path, "w", encoding="utf-8") as output_file:
             output_file.write(rendered + "\n")
     except OSError as error:
-        print(f"No se pudo escribir el informe: {error}", file=sys.stderr)
+        print(f"Could not write report: {error}", file=sys.stderr)
         return 1
-    print(f"Informe guardado en {output_path}")
+    print(f"Report saved to {output_path}")
     return 0
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Kit OSINT multiplataforma para consultas autorizadas a fuentes públicas."
+        description="Cross-platform OSINT toolkit for authorized research using public sources."
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
-    parser.add_argument("--update", action="store_true", help="instalar el último release estable desde GitHub")
+    parser.add_argument("--update", action="store_true", help="install the latest stable release from GitHub")
     subparsers = parser.add_subparsers(dest="command")
-    domain_parser = subparsers.add_parser("domain", help="Consultar RDAP, DNS y transparencia TLS")
-    domain_parser.add_argument("target", type=valid_domain, help="dominio bajo investigación autorizada")
-    domain_parser.add_argument("-o", "--output", help="guardar el informe JSON en esta ruta")
-    domain_parser.add_argument("--timeout", type=int, default=10, help="timeout por fuente, en segundos (1-60)")
-    ip_parser = subparsers.add_parser("ip", help="Consultar RDAP y DNS inverso para una IP pública")
-    ip_parser.add_argument("target", type=valid_public_ip, help="dirección IPv4 o IPv6 pública")
-    ip_parser.add_argument("-o", "--output", help="guardar el informe JSON en esta ruta")
-    ip_parser.add_argument("--timeout", type=int, default=10, help="timeout por fuente, en segundos (1-60)")
-    ioc_parser = subparsers.add_parser("ioc", help="Generar enlaces de reputación para un indicador")
-    ioc_parser.add_argument("indicator", help="dominio, IP, URL HTTP(S), o hash MD5/SHA1/SHA256")
-    ioc_parser.add_argument("-o", "--output", help="guardar el informe JSON en esta ruta")
-    search_parser = subparsers.add_parser("search", help="Generar enlaces para búsquedas manuales")
-    search_parser.add_argument("target", help="nombre de usuario u organización")
+    domain_parser = subparsers.add_parser("domain", help="Look up RDAP, DNS, and TLS certificate transparency")
+    domain_parser.add_argument("target", type=valid_domain, help="domain under authorized investigation")
+    domain_parser.add_argument("-o", "--output", help="write the JSON report to this path")
+    domain_parser.add_argument("--timeout", type=int, default=10, help="timeout per source, in seconds (1-60)")
+    ip_parser = subparsers.add_parser("ip", help="Look up RDAP and reverse DNS for a public IP")
+    ip_parser.add_argument("target", type=valid_public_ip, help="public IPv4 or IPv6 address")
+    ip_parser.add_argument("-o", "--output", help="write the JSON report to this path")
+    ip_parser.add_argument("--timeout", type=int, default=10, help="timeout per source, in seconds (1-60)")
+    ioc_parser = subparsers.add_parser("ioc", help="Generate reputation links for an indicator")
+    ioc_parser.add_argument("indicator", help="domain, IP address, HTTP(S) URL, or MD5/SHA1/SHA256 hash")
+    ioc_parser.add_argument("-o", "--output", help="write the JSON report to this path")
+    search_parser = subparsers.add_parser("search", help="Generate links for manual public-source searches")
+    search_parser.add_argument("target", help="username, person, company, or organization name")
     search_parser.add_argument("--kind", choices=("username", "person", "organization", "company"), required=True)
-    search_parser.add_argument("-o", "--output", help="guardar el informe JSON en esta ruta")
-    phone_parser = subparsers.add_parser("phone", help="Validar un teléfono internacional sin buscar a su titular")
-    phone_parser.add_argument("number", help="número internacional E.164, por ejemplo +14155552671")
-    phone_parser.add_argument("-o", "--output", help="guardar el informe JSON en esta ruta")
+    search_parser.add_argument("-o", "--output", help="write the JSON report to this path")
+    profiles_parser = subparsers.add_parser("profiles", help="Check public profile presence for one username")
+    profiles_parser.add_argument("username", type=valid_username, help="single username to check")
+    profiles_parser.add_argument("--timeout", type=int, default=10, help="timeout per service, in seconds (1-30)")
+    profiles_parser.add_argument("-o", "--output", help="write the JSON report to this path")
+    phone_parser = subparsers.add_parser("phone", help="Validate an international phone number without identifying its owner")
+    phone_parser.add_argument("number", help="international E.164 number, for example +14155552671")
+    phone_parser.add_argument("-o", "--output", help="write the JSON report to this path")
     args = parser.parse_args()
 
     if args.update:
@@ -395,7 +504,9 @@ def main() -> int:
         parser.print_help()
         return 0
     if args.command in {"domain", "ip"} and not 1 <= args.timeout <= 60:
-        parser.error("--timeout debe estar entre 1 y 60 segundos")
+        parser.error("--timeout must be between 1 and 60 seconds")
+    if args.command == "profiles" and not 1 <= args.timeout <= 30:
+        parser.error("--timeout must be between 1 and 30 seconds")
     if args.command == "domain":
         report = build_report(args.target, args.timeout)
     elif args.command == "ip":
@@ -410,9 +521,11 @@ def main() -> int:
             report = build_phone_report(args.number)
         except argparse.ArgumentTypeError as error:
             parser.error(str(error))
+    elif args.command == "profiles":
+        report = build_profile_report(args.username, args.timeout)
     else:
         if not args.target.strip():
-            parser.error("el objetivo de búsqueda no puede estar vacío")
+            parser.error("search target cannot be empty")
         report = build_search_report(args.target, args.kind)
     return write_report(report, args.output)
 

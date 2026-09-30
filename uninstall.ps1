@@ -7,7 +7,7 @@ if ($pythonCommand) {
 } else {
     $pythonCommand = Get-Command python -ErrorAction SilentlyContinue
     if (-not $pythonCommand) {
-        throw "No se encontró Python. No se puede desinstalar el paquete con pip."
+        throw "Python was not found. The package cannot be uninstalled with pip."
     }
     $python = $pythonCommand.Source
     $pythonArgs = @()
@@ -15,7 +15,7 @@ if ($pythonCommand) {
 
 & $python @pythonArgs -m pip uninstall --yes open-osint-kit
 if ($LASTEXITCODE -ne 0) {
-    throw "pip no pudo desinstalar open-osint-kit."
+    throw "pip could not uninstall open-osint-kit."
 }
 
 $ownedScriptsPath = [Environment]::GetEnvironmentVariable("OPEN_OSINT_KIT_ADDED_PATH", "User")
@@ -30,9 +30,9 @@ if ($ownedScriptsPath) {
     $env:Path = @($env:Path -split ";" | Where-Object {
         $_.TrimEnd("\") -ine $ownedScriptsPath.TrimEnd("\")
     }) -join ";"
-    Write-Host "Se retiró del PATH la entrada añadida por Open OSINT Kit: $ownedScriptsPath"
+    Write-Host "Removed the PATH entry added by Open OSINT Kit: $ownedScriptsPath"
 } else {
-    Write-Host "Se conservó el PATH de Python porque esta instalación no registró una ruta propia."
+    Write-Host "Kept the Python PATH entry because this installation did not register it as kit-owned."
 }
 
-Write-Host "Open OSINT Kit fue desinstalado. Las dependencias compartidas, como phonenumbers, se conservaron."
+Write-Host "Open OSINT Kit was uninstalled. Shared dependencies such as phonenumbers were kept."

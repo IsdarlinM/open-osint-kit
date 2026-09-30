@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "open-osint-kit"
-version = "1.1.1"
-description = "Kit OSINT multiplataforma para investigaciones autorizadas con fuentes públicas"
+version = "1.2.0"
+description = "Cross-platform OSINT toolkit for authorized research using public sources"
 requires-python = ">=3.9"
 dependencies = ["phonenumbers>=8.13"]
 

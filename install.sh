@@ -7,7 +7,7 @@ if command -v python3 >/dev/null 2>&1; then
 elif command -v python >/dev/null 2>&1; then
     python_command="$(command -v python)"
 else
-    printf '%s\n' "No se encontró Python 3.9+. Instálalo y vuelve a ejecutar este script." >&2
+    printf '%s\n' "Python 3.9+ was not found. Install it, then run this script again." >&2
     exit 1
 fi
 base_python="$("$python_command" -c 'import sys; print(getattr(sys, "_base_executable", sys.executable))')"
@@ -36,6 +36,6 @@ if [[ ! -f "$shell_config" ]] || ! grep -Fqx -- "$path_line" "$shell_config"; th
     printf '%s\n' "$shell_config" > "$install_root/path-config"
 fi
 
-printf 'Instalado. Ejecuta: osint-kit --help\n'
-printf 'Instalación aislada en %s.\n' "$install_root"
-printf 'Se añadió %s al PATH de %s; abre una terminal nueva para aplicarlo.\n' "$bin_dir" "$shell_config"
+printf 'Installed. Run: osint-kit --help\n'
+printf 'Isolated environment: %s.\n' "$install_root"
+printf 'Added %s to PATH in %s; open a new terminal to apply it.\n' "$bin_dir" "$shell_config"

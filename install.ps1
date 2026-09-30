@@ -7,7 +7,7 @@ if ($pythonCommand) {
 } else {
     $pythonCommand = Get-Command python -ErrorAction SilentlyContinue
     if (-not $pythonCommand) {
-        throw "No se encontró Python 3.9+. Instálalo y vuelve a ejecutar este script."
+        throw "Python 3.9+ was not found. Install it, then run this script again."
     }
     $python = $pythonCommand.Source
     $pythonArgs = @()
@@ -15,20 +15,20 @@ if ($pythonCommand) {
 
 $isVirtualEnvironment = & $python @pythonArgs -c "import sys; print(int(sys.prefix != sys.base_prefix))"
 if ($LASTEXITCODE -ne 0) {
-    throw "No se pudo ejecutar Python."
+    throw "Python could not be run."
 }
 if ($isVirtualEnvironment.Trim() -eq "1") {
-    throw "Desactiva el entorno virtual antes de instalar el comando para tu usuario."
+    throw "Deactivate the virtual environment before installing the user command."
 }
 
 & $python @pythonArgs -m pip install --user --upgrade --force-reinstall $PSScriptRoot
 if ($LASTEXITCODE -ne 0) {
-    throw "La instalación falló. Comprueba que pip esté disponible y vuelve a intentarlo."
+    throw "Installation failed. Make sure pip is available, then try again."
 }
 
 $scriptsPath = (& $python @pythonArgs -c "import sysconfig; print(sysconfig.get_path('scripts', 'nt_user'))").Trim()
 if (-not $scriptsPath) {
-    throw "No se pudo determinar la carpeta de comandos de Python."
+    throw "Could not determine the Python scripts directory."
 }
 
 $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
@@ -40,5 +40,5 @@ if (-not ($pathEntries | Where-Object { $_.TrimEnd("\") -ieq $scriptsPath.TrimEn
 }
 $env:Path = "$scriptsPath;$env:Path"
 
-Write-Host "Instalado. Ejecuta: osint-kit --help"
-Write-Host "Abre una terminal nueva para que el PATH actualizado se aplique a otras sesiones."
+Write-Host "Installed. Run: osint-kit --help"
+Write-Host "Open a new terminal for the updated PATH to apply to other sessions."
