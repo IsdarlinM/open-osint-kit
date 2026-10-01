@@ -37,7 +37,7 @@ from rich.table import Table
 from rich.theme import Theme
 from rich_argparse import RichHelpFormatter
 
-__version__ = "1.8.0"
+__version__ = "1.8.1"
 USER_AGENT = f"OpenOSINTKit/{__version__} (passive public-source research)"
 GITHUB_RELEASE_API = "https://api.github.com/repos/IsdarlinM/open-osint-kit/releases/latest"
 GITHUB_MAIN_COMMIT_API = "https://api.github.com/repos/IsdarlinM/open-osint-kit/commits/main"
@@ -734,6 +734,56 @@ def lookup_ip_rdap(address: str, timeout: int) -> dict:
     }
 
 
+def lookup_ip_asn(address: str, timeout: int) -> dict:
+    parsed_address = ipaddress.ip_address(address)
+    if parsed_address.version == 4:
+        reversed_address = ".".join(reversed(str(parsed_address).split(".")))
+        query_name = f"{reversed_address}.origin.asn.cymru.com"
+    else:
+        reversed_nibbles = ".".join(reversed(parsed_address.exploded.replace(":", "")))
+        query_name = f"{reversed_nibbles}.origin6.asn.cymru.com"
+
+    response = lookup_dns(query_name, "TXT", timeout)
+    response_code = response.get("status_code")
+    if response_code == 3:
+        return {
+            "provider": f"Team Cymru via {response['provider']} DNS-over-HTTPS",
+            "status": "not_found",
+            "records": [],
+        }
+    if response_code != 0:
+        raise OSError(f"Team Cymru DNS lookup returned response code {response_code}")
+
+    records = []
+    seen = set()
+    for answer in response.get("answers", []):
+        if not isinstance(answer, str):
+            continue
+        fields = [field.strip() for field in answer.strip().strip('"').split("|")]
+        if len(fields) < 2 or not fields[0].isdigit():
+            continue
+        asn_number = int(fields[0])
+        if not 1 <= asn_number <= 4294967295:
+            continue
+        record = {
+            "asn": f"AS{asn_number}",
+            "prefix": fields[1] or None,
+            "country_code": fields[2] if len(fields) > 2 and fields[2] else None,
+            "registry": fields[3] if len(fields) > 3 and fields[3] else None,
+            "allocated": fields[4] if len(fields) > 4 and fields[4] else None,
+        }
+        record_key = (record["asn"], record["prefix"])
+        if record_key not in seen:
+            seen.add(record_key)
+            records.append(record)
+    return {
+        "provider": f"Team Cymru via {response['provider']} DNS-over-HTTPS",
+        "status": "ok" if records else "not_found",
+        "records": records,
+        "notice": "BGP origin data describes route announcements, not device ownership or physical location",
+    }
+
+
 def build_report(domain: str, timeout: int) -> dict:
     return {
         "target": domain,
@@ -761,6 +811,7 @@ def build_ip_report(address: str, timeout: int) -> dict:
         "mode": "passive public-source lookups",
         "sources": {
             "rdap": safe_lookup(lambda: lookup_ip_rdap(address, timeout)),
+            "asn": safe_lookup(lambda: lookup_ip_asn(address, timeout)),
             "reverse_dns": safe_lookup(lambda: lookup_dns(reverse_name, "PTR", timeout)),
         },
     }
@@ -2070,7 +2121,7 @@ def main() -> int:
     domain_parser.add_argument("target", type=valid_domain, help="domain under authorized investigation")
     add_report_output_options(domain_parser)
     domain_parser.add_argument("--timeout", type=int, default=10, help="timeout per source, in seconds (1-60)")
-    ip_parser = subparsers.add_parser("ip", help="Look up RDAP and reverse DNS for a public IP")
+    ip_parser = subparsers.add_parser("ip", help="Look up RDAP, ASN, and reverse DNS for a public IP")
     ip_parser.add_argument("target", type=valid_public_ip, help="public IPv4 or IPv6 address")
     add_report_output_options(ip_parser)
     ip_parser.add_argument("--timeout", type=int, default=10, help="timeout per source, in seconds (1-60)")

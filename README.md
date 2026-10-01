@@ -1,4 +1,4 @@
-# Open OSINT Kit 1.8.0
+# Open OSINT Kit 1.8.1
 
 ![Open OSINT Kit: open-source intelligence](assets/banner.svg)
 
@@ -8,7 +8,7 @@ Cross-platform Python CLI for authorized research into domains, infrastructure, 
 
 `domain` gathers RDAP, DNS (A, AAAA, MX, NS, TXT, and CAA) over DNS-over-HTTPS, and Certificate Transparency records. Each source fails independently.
 
-`ip` checks RDAP and reverse DNS for a public address. Private, local, and reserved IP addresses are rejected.
+`ip` checks RDAP, reverse DNS, and the BGP origin ASN and prefix for a public address. ASN data comes from Team Cymru's [IP-to-ASN DNS service](https://www.team-cymru.com/ip-asn-mapping) over DNS-over-HTTPS. It describes route announcements, not device ownership or physical location. Private, local, and reserved IP addresses are rejected.
 
 `ioc` classifies domains, IP addresses, HTTP(S) URLs, and MD5/SHA1/SHA256 hashes, then generates links to public services such as VirusTotal, AlienVault OTX, URLhaus, AbuseIPDB, and CIRCL Hashlookup. Indicators are not submitted automatically.
 
