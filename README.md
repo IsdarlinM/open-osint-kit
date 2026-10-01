@@ -1,4 +1,4 @@
-# Open OSINT Kit 1.8.1
+# Open OSINT Kit 1.9.0
 
 ![Open OSINT Kit: open-source intelligence](assets/banner.svg)
 
@@ -20,7 +20,7 @@ Cross-platform Python CLI for authorized research into domains, infrastructure, 
 
 `shodan` performs a passive indexed-data lookup for one public IP. It returns hostnames, domains, organization, ISP, ASN, country code, and last update only; it does not scan or return ports, banners, or vulnerability data.
 
-`shodan-range` searches Shodan's existing index for public IPv4/IPv6 CIDR ranges up to 256 addresses (`/24` IPv4 or `/120` IPv6). `asn` searches indexed hosts by autonomous system number. Both commands paginate sequentially up to 500 results, cache successful results for five minutes by default, and return partial results if a later page is rate-limited; they never initiate scans.
+`shodan-range` searches Shodan's existing index for public IPv4/IPv6 CIDR ranges up to 256 addresses (`/24` IPv4 or `/120` IPv6). `asn` searches Shodan's indexed hosts when a key is configured and the service responds. If no Shodan key is configured or the lookup fails, it automatically falls back to RIPEstat's public [Announced Prefixes API](https://stat.ripe.net/docs/data-api/api-endpoints/announced-prefixes) and lists prefixes observed by RIPE RIS during the default two-week window, with at least 10 peers seeing each prefix. This fallback requires no API key, but reports BGP prefixes rather than hosts or exposed services. The Shodan searches paginate sequentially up to 500 results and cache successful responses for five minutes by default; the RIPEstat fallback is not cached. Neither command initiates scans.
 
 `config set-shodan-key` prompts for the key without echoing it and stores it in the operating system keyring. `SHODAN_API_KEY` is also supported and takes precedence. The key is never printed or included in reports.
 
@@ -104,9 +104,9 @@ osint-kit config clear-cache
 osint-kit config remove-shodan-key
 ```
 
-Shodan results are cached per user for five minutes and profile checks for 15 minutes under `%LOCALAPPDATA%\open-osint-kit` on Windows or `$XDG_CACHE_HOME/open-osint-kit` (default `~/.cache/open-osint-kit`) on Linux. Profile cache files contain a source status and check time, not the username. Set `--cache-ttl 0` on either command to disable its cache; `config clear-cache` removes Shodan and profile caches without deleting reports saved to user-selected paths.
+Shodan results are cached per user for five minutes and profile checks for 15 minutes under `%LOCALAPPDATA%\open-osint-kit` on Windows or `$XDG_CACHE_HOME/open-osint-kit` (default `~/.cache/open-osint-kit`) on Linux. Profile cache files contain a source status and check time, not the username. Set `--cache-ttl 0` on Shodan-backed commands or profile checks to disable their cache; the RIPEstat ASN fallback is not cached. `config clear-cache` removes Shodan and profile caches without deleting reports saved to user-selected paths.
 
-`domain`, `ip`, `profiles`, `shodan`, `shodan-range`, `asn`, `config test-shodan`, and `--update` require an internet connection. `ioc`, `search`, the other `config` actions, and `phone` do not make research lookups; `phone` analyzes numbering-plan metadata locally. The `domain` and `ip` timeouts apply per source, so a full run may take longer than the configured timeout. `profiles` queries selected public endpoints concurrently and marks sources that rate-limit or cannot be reached as `unavailable` when `--include-unconfirmed` is used.
+`domain`, `ip`, `profiles`, `shodan`, `shodan-range`, `asn`, `config test-shodan`, and `--update` require an internet connection. `shodan` and `shodan-range` require a Shodan API key; `asn` can use RIPEstat without one. `ioc`, `search`, the other `config` actions, and `phone` do not make research lookups; `phone` analyzes numbering-plan metadata locally. The `domain` and `ip` timeouts apply per source, so a full run may take longer than the configured timeout. `profiles` queries selected public endpoints concurrently and marks sources that rate-limit or cannot be reached as `unavailable` when `--include-unconfirmed` is used.
 
 ## Tests
 

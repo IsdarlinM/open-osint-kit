@@ -37,7 +37,7 @@ from rich.table import Table
 from rich.theme import Theme
 from rich_argparse import RichHelpFormatter
 
-__version__ = "1.8.1"
+__version__ = "1.9.0"
 USER_AGENT = f"OpenOSINTKit/{__version__} (passive public-source research)"
 GITHUB_RELEASE_API = "https://api.github.com/repos/IsdarlinM/open-osint-kit/releases/latest"
 GITHUB_MAIN_COMMIT_API = "https://api.github.com/repos/IsdarlinM/open-osint-kit/commits/main"
@@ -608,6 +608,144 @@ def build_shodan_search_report(
     if report["status"] == "ok" and cache_ttl > 0:
         _write_shodan_cache(cache_query, api_key, limit, report, cache_dir)
     return {**report, "cache": {"status": "miss", "ttl_seconds": cache_ttl}}
+
+
+def build_ripestat_asn_report(target: str, timeout: int, limit: int) -> dict:
+    if not 1 <= timeout <= 30:
+        raise ValueError("timeout must be between 1 and 30 seconds")
+    if not 1 <= limit <= SHODAN_MAX_RESULTS:
+        raise ValueError(f"limit must be between 1 and {SHODAN_MAX_RESULTS}")
+    asn = valid_asn(target)
+    url = "https://stat.ripe.net/data/announced-prefixes/data.json?" + urlencode({
+        "resource": asn,
+        "min_peers_seeing": 10,
+        "sourceapp": "open-osint-kit",
+    })
+    response = fetch_json(url, timeout)
+    if not isinstance(response, dict) or response.get("status") != "ok":
+        raise ValueError("RIPEstat returned an invalid or unsuccessful response")
+    data = response.get("data")
+    raw_prefixes = data.get("prefixes") if isinstance(data, dict) else None
+    if not isinstance(raw_prefixes, list):
+        raise ValueError("RIPEstat response did not include an announced-prefix list")
+
+    prefixes = []
+    seen = set()
+    for item in raw_prefixes:
+        if not isinstance(item, dict):
+            continue
+        prefix = item.get("prefix")
+        if not isinstance(prefix, str):
+            continue
+        try:
+            network = ipaddress.ip_network(prefix, strict=False)
+        except ValueError:
+            continue
+        canonical_prefix = str(network)
+        if canonical_prefix in seen:
+            continue
+        seen.add(canonical_prefix)
+        timelines = item.get("timelines", [])
+        valid_timelines = (
+            [entry for entry in timelines if isinstance(entry, dict)]
+            if isinstance(timelines, list)
+            else []
+        )
+        latest_timeline = max(
+            valid_timelines,
+            key=lambda entry: str(entry.get("endtime", "")),
+            default={},
+        )
+        prefixes.append(
+            {
+                "prefix": canonical_prefix,
+                "ip_version": network.version,
+                "observed_from": latest_timeline.get("starttime"),
+                "observed_until": latest_timeline.get("endtime"),
+            }
+        )
+    prefixes.sort(
+        key=lambda item: (
+            item["ip_version"],
+            int(ipaddress.ip_network(item["prefix"]).network_address),
+            ipaddress.ip_network(item["prefix"]).prefixlen,
+        )
+    )
+    return {
+        "target": asn,
+        "target_type": "asn",
+        "source": "RIPEstat",
+        "status": "ok",
+        "mode": "public BGP prefix observations from RIPE RIS; no API key required",
+        "query_starttime": data.get("query_starttime"),
+        "query_endtime": data.get("query_endtime"),
+        "total_prefixes": len(prefixes),
+        "returned_prefixes": min(len(prefixes), limit),
+        "results": prefixes[:limit],
+        "notice": (
+            "RIPEstat reports prefixes observed by its RIS collectors during the default "
+            "two-week window, with at least 10 peers seeing each prefix; this does not "
+            "enumerate hosts or exposed services"
+        ),
+    }
+
+
+def build_asn_report(
+    target: str,
+    timeout: int,
+    limit: int,
+    cache_ttl: int = SHODAN_DEFAULT_CACHE_TTL,
+) -> dict:
+    asn = valid_asn(target)
+    shodan_report = None
+    if not 1 <= timeout <= 30:
+        raise ValueError("timeout must be between 1 and 30 seconds")
+    if not 1 <= limit <= SHODAN_MAX_RESULTS:
+        raise ValueError(f"limit must be between 1 and {SHODAN_MAX_RESULTS}")
+    if not 0 <= cache_ttl <= 86400:
+        raise ValueError("cache_ttl must be between 0 and 86400 seconds")
+    api_key = get_shodan_api_key()
+    if api_key:
+        shodan_report = build_shodan_search_report(
+            asn,
+            f"asn:{asn}",
+            "asn",
+            api_key,
+            timeout,
+            limit,
+            cache_ttl,
+        )
+        if shodan_report.get("status") != "error":
+            return shodan_report
+        fallback_reason = f"Shodan lookup failed: {shodan_report.get('error', 'unknown error')}"
+    else:
+        fallback_reason = "Shodan API key is not configured"
+
+    try:
+        report = build_ripestat_asn_report(asn, timeout, limit)
+    except (
+        HTTPError,
+        URLError,
+        TimeoutError,
+        OSError,
+        ValueError,
+        TypeError,
+        AttributeError,
+    ) as error:
+        report = {
+            "target": asn,
+            "target_type": "asn",
+            "source": "RIPEstat",
+            "status": "error",
+            "error": f"RIPEstat lookup failed ({type(error).__name__}): {error}",
+        }
+        if shodan_report is not None:
+            report["shodan_error"] = shodan_report.get("error")
+    report["fallback"] = {
+        "reason": fallback_reason,
+        "source": "RIPEstat",
+    }
+    return report
 
 
 def safe_lookup(callback) -> dict:
@@ -2192,11 +2330,19 @@ def main() -> int:
     range_parser.add_argument("--timeout", type=int, default=10, help="request timeout, in seconds (1-30)")
     range_parser.add_argument("--cache-ttl", type=int, default=SHODAN_DEFAULT_CACHE_TTL, help="cache lifetime in seconds (0 disables cache; max 86400)")
     add_report_output_options(range_parser)
-    asn_parser = subparsers.add_parser("asn", help="Search Shodan's indexed data for an autonomous system number")
+    asn_parser = subparsers.add_parser(
+        "asn",
+        help="Investigate an ASN with Shodan or fall back to RIPEstat announced prefixes",
+    )
     asn_parser.add_argument("number", type=valid_asn, help="ASN such as AS15169 or 15169")
-    asn_parser.add_argument("--limit", type=int, choices=(10, 25, 50, 100, 250, 500), default=100, help="maximum indexed results to include (default: 100; max: 500)")
+    asn_parser.add_argument("--limit", type=int, choices=(10, 25, 50, 100, 250, 500), default=100, help="maximum hosts or announced prefixes to include (default: 100; max: 500)")
     asn_parser.add_argument("--timeout", type=int, default=10, help="request timeout, in seconds (1-30)")
-    asn_parser.add_argument("--cache-ttl", type=int, default=SHODAN_DEFAULT_CACHE_TTL, help="cache lifetime in seconds (0 disables cache; max 86400)")
+    asn_parser.add_argument(
+        "--cache-ttl",
+        type=int,
+        default=SHODAN_DEFAULT_CACHE_TTL,
+        help="Shodan cache lifetime in seconds (RIPEstat fallback is not cached; max 86400)",
+    )
     add_report_output_options(asn_parser)
     args = parser.parse_args()
 
@@ -2292,15 +2438,8 @@ def main() -> int:
             args.cache_ttl,
         )
     elif args.command == "asn":
-        api_key = get_shodan_api_key()
-        if not api_key:
-            ERROR_CONSOLE.print("[error]Shodan API key is not configured. Run `osint-kit config set-shodan-key`.[/error]")
-            return 2
-        report = build_shodan_search_report(
+        report = build_asn_report(
             args.number,
-            f"asn:{args.number}",
-            "asn",
-            api_key,
             args.timeout,
             args.limit,
             args.cache_ttl,
