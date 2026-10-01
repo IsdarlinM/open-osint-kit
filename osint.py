@@ -38,7 +38,7 @@ from rich.table import Table
 from rich.theme import Theme
 from rich_argparse import RichHelpFormatter
 
-__version__ = "1.9.1"
+__version__ = "1.9.2"
 USER_AGENT = f"OpenOSINTKit/{__version__} (passive public-source research)"
 GITHUB_RELEASE_API = "https://api.github.com/repos/IsdarlinM/open-osint-kit/releases/latest"
 GITHUB_MAIN_COMMIT_API = "https://api.github.com/repos/IsdarlinM/open-osint-kit/commits/main"
@@ -1925,7 +1925,70 @@ def _table_cell(value: object) -> str:
     return escape(text)
 
 
+def _render_profile_results_table(console: Console, report: dict) -> None:
+    results = [
+        result
+        for result in report.get("results", [])
+        if isinstance(result, dict) and result.get("status", "confirmed") == "confirmed"
+    ]
+    if not results:
+        target = report.get("target")
+        console.print(f"[info]No confirmed public profiles found for {escape(str(target))}.[/info]")
+        return
+
+    target_type = report.get("target_type")
+    if target_type == "username_batch":
+        console.print(f"[bold]Confirmed profiles found: {len(results)}[/bold]")
+    else:
+        console.print(
+            f"[bold]Confirmed profiles for {escape(str(report.get('target', '')))} "
+            f"({len(results)} found)[/bold]"
+        )
+
+    table = Table(
+        box=box.MINIMAL,
+        expand=True,
+        pad_edge=False,
+        padding=(0, 1),
+        header_style="bold",
+    )
+    terminal_width = max(40, console.width)
+    if target_type == "username_batch":
+        username_width = max(8, min(24, terminal_width // 4))
+        platform_width = max(10, min(20, terminal_width // 4))
+        profile_width = max(12, terminal_width - username_width - platform_width - 8)
+        table.add_column(
+            "Username",
+            style="cyan",
+            no_wrap=True,
+            overflow="ellipsis",
+            max_width=username_width,
+        )
+    else:
+        platform_width = max(12, min(24, terminal_width // 3))
+        profile_width = max(12, terminal_width - platform_width - 5)
+    table.add_column("Platform", no_wrap=True, overflow="ellipsis", max_width=platform_width)
+    table.add_column("Profile", overflow="fold", max_width=profile_width)
+    for result in results:
+        row = []
+        if target_type == "username_batch":
+            row.append(_table_cell(result.get("username", "")))
+        row.extend((
+            _table_cell(result.get("service") or "Public profile"),
+            _table_cell(result.get("profile_url", "")),
+        ))
+        table.add_row(*row)
+    console.print(table)
+
+
 def _render_report_table(console: Console, report: dict) -> None:
+    if (
+        report.get("target_type") in {"username", "username_batch"}
+        and "checks" not in report
+    ):
+        _render_profile_results_table(console, report)
+        return
+
     fields, record_tables = _report_table_parts(report)
 
     if fields:

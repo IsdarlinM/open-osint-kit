@@ -1,4 +1,4 @@
-# Open OSINT Kit 1.9.1
+# Open OSINT Kit 1.9.2
 
 ![Open OSINT Kit: open-source intelligence](assets/banner.svg)
 
@@ -14,7 +14,7 @@ Cross-platform Python CLI for authorized research into domains, infrastructure, 
 
 `search` generates manual search links for usernames, people, companies, and organizations. It does not scrape profiles, collect search results, or verify identities.
 
-`profiles` checks public APIs for GitHub, GitLab, DEV Community, Hacker News, Bluesky, Reddit, Codeberg, Hugging Face, HackerOne, Bugcrowd, YesWeHack, and Intigriti, plus WebFinger on six Mastodon instances. By default, it lists only exact confirmed matches. Use repeatable `--group social|developer|security` or `--source <id>` options to select sources. It also accepts a UTF-8 username file with up to 50 entries using `--file`; blank lines, comments, and duplicate handles are skipped. Use `--workers` to limit concurrent requests, `--cache-ttl` to set a per-source cache lifetime (15 minutes by default, `0` disables caching), and `--include-unconfirmed` to show missing or unavailable checks. Temporary server errors get at most one retry; HTTP 429 is retried only when the server provides a short `Retry-After` value. Each result records its public profile URL, exact-match method, check time, source ID, and cache status. Unavailable checks are never cached. For Bluesky, a username without a domain is checked as `<username>.bsky.social`; Mastodon checks exact WebFinger account subjects.
+`profiles` checks public APIs for GitHub, GitLab, DEV Community, Hacker News, Bluesky, Reddit, Codeberg, Hugging Face, HackerOne, Bugcrowd, YesWeHack, and Intigriti, plus WebFinger on six Mastodon instances. The default terminal view is compact and lists only confirmed profiles with their platform and public profile URL; it does not list sources where no match was found. Use repeatable `--group social|developer|security` or `--source <id>` options to select sources. It also accepts a UTF-8 username file with up to 50 entries using `--file`; blank lines, comments, and duplicate handles are skipped. Use `--workers` to limit concurrent requests, `--cache-ttl` to set a per-source cache lifetime (15 minutes by default, `0` disables caching), and `--include-unconfirmed` to show missing or unavailable checks. Temporary server errors get at most one retry; HTTP 429 is retried only when the server provides a short `Retry-After` value. Each result records its public profile URL, exact-match method, check time, source ID, and cache status in exported reports. Unavailable checks are never cached. For Bluesky, a username without a domain is checked as `<username>.bsky.social`; Mastodon checks exact WebFinger account subjects.
 
 `phone` validates an international E.164 number and reports its formatting, numbering-plan region, and line type. It does not query carriers, identify owners, or verify that a line is active.
 
