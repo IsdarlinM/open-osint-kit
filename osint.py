@@ -30,13 +30,14 @@ from urllib.request import Request, urlopen
 import keyring
 import phonenumbers
 from keyring.errors import KeyringError, PasswordDeleteError
+from rich import box
 from rich.console import Console
 from rich.markup import escape
 from rich.table import Table
 from rich.theme import Theme
 from rich_argparse import RichHelpFormatter
 
-__version__ = "1.7.0"
+__version__ = "1.7.1"
 USER_AGENT = f"OpenOSINTKit/{__version__} (passive public-source research)"
 GITHUB_RELEASE_API = "https://api.github.com/repos/IsdarlinM/open-osint-kit/releases/latest"
 GITHUB_MAIN_COMMIT_API = "https://api.github.com/repos/IsdarlinM/open-osint-kit/commits/main"
@@ -1315,11 +1316,16 @@ def _table_cell(value: object) -> str:
 
 
 def _render_report_table(console: Console, report: dict) -> None:
-    title = report.get("target") or report.get("comparison") or "OSINT report"
     fields, record_tables = _report_table_parts(report)
 
     if fields:
-        table = Table(title=f"OSINT report: {escape(str(title))}", expand=True)
+        table = Table(
+            box=box.MINIMAL,
+            expand=False,
+            pad_edge=False,
+            padding=(0, 1),
+            header_style="bold",
+        )
         table.add_column("Field", style="cyan", overflow="fold")
         table.add_column("Value", overflow="fold")
         for field, value in fields:
@@ -1328,7 +1334,14 @@ def _render_report_table(console: Console, report: dict) -> None:
 
     for table_title, records in record_tables:
         columns = list(dict.fromkeys(key for record in records for key in record))
-        table = Table(title=escape(table_title), expand=True)
+        console.print(f"\n[bold]{escape(table_title)}[/bold]")
+        table = Table(
+            box=box.MINIMAL,
+            expand=False,
+            pad_edge=False,
+            padding=(0, 1),
+            header_style="bold",
+        )
         if not columns:
             table.add_column("Record")
             for _record in records:

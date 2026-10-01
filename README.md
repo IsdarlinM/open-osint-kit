@@ -1,4 +1,4 @@
-# Open OSINT Kit 1.7.0
+# Open OSINT Kit 1.7.1
 
 ![Open OSINT Kit: open-source intelligence](assets/banner.svg)
 
@@ -24,7 +24,7 @@ Cross-platform Python CLI for authorized research into domains, infrastructure, 
 
 `config set-shodan-key` prompts for the key without echoing it and stores it in the operating system keyring. `SHODAN_API_KEY` is also supported and takes precedence. The key is never printed or included in reports.
 
-Reports are shown as readable tables by default. Use `--format table`, `--format json`, `--format csv`, or `--format markdown` to choose another view. With `--output`, `.json`, `.csv`, `.md`/`.markdown`, and `.txt` filenames select a format automatically; unrecognized extensions default to JSON. An explicit `--format` always takes precedence. Rich disables color when output is redirected; set `NO_COLOR=1` to disable it explicitly.
+Terminal reports use compact, aligned columns with simple headers. Use `--format table`, `--format json`, `--format csv`, or `--format markdown` to choose another view. With `--output`, `.json`, `.csv`, `.md`/`.markdown`, and `.txt` filenames select a format automatically; unrecognized extensions default to JSON. An explicit `--format` always takes precedence. Rich disables color when output is redirected; set `NO_COLOR=1` to disable it explicitly.
 
 `--update` checks this repository's latest stable release and, when a newer version is available, installs the source archive for that release tag with `pip`. If the version is unchanged, it compares the installed release or commit against `main`; newer commits are installed by SHA. The SHA recorded by `pip` is reused on later checks, so an already-installed commit is not repeatedly reinstalled.
 
