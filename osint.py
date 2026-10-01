@@ -37,7 +37,7 @@ from rich.table import Table
 from rich.theme import Theme
 from rich_argparse import RichHelpFormatter
 
-__version__ = "1.7.2"
+__version__ = "1.8.0"
 USER_AGENT = f"OpenOSINTKit/{__version__} (passive public-source research)"
 GITHUB_RELEASE_API = "https://api.github.com/repos/IsdarlinM/open-osint-kit/releases/latest"
 GITHUB_MAIN_COMMIT_API = "https://api.github.com/repos/IsdarlinM/open-osint-kit/commits/main"
@@ -48,6 +48,11 @@ DNS_TYPES = ("A", "AAAA", "MX", "NS", "TXT", "CAA")
 SHODAN_RESULTS_PER_PAGE = 100
 SHODAN_MAX_RESULTS = 500
 SHODAN_DEFAULT_CACHE_TTL = 300
+PROFILE_DEFAULT_CACHE_TTL = 900
+PROFILE_MAX_CACHE_TTL = 86400
+PROFILE_DEFAULT_WORKERS = 4
+PROFILE_MAX_WORKERS = 8
+PROFILE_BATCH_MAX = 50
 REPORT_FORMATS = ("table", "json", "csv", "markdown")
 MASTODON_INSTANCES = (
     "mastodon.social",
@@ -56,6 +61,76 @@ MASTODON_INSTANCES = (
     "fosstodon.org",
     "infosec.exchange",
     "mastodon.world",
+)
+PROFILE_SOURCE_GROUPS = {
+    "bluesky": ("social",),
+    "reddit": ("social",),
+    "mastodon.social": ("social",),
+    "mastodon.online": ("social",),
+    "mstdn.social": ("social",),
+    "fosstodon.org": ("social",),
+    "infosec.exchange": ("social",),
+    "mastodon.world": ("social",),
+    "github": ("developer", "security"),
+    "gitlab": ("developer", "security"),
+    "dev-to": ("developer",),
+    "hacker-news": ("developer",),
+    "codeberg": ("developer",),
+    "huggingface": ("developer",),
+    "hackerone": ("security",),
+    "bugcrowd": ("security",),
+    "yeswehack": ("security",),
+    "intigriti": ("security",),
+}
+PROFILE_GROUPS = ("social", "developer", "security")
+PROFILE_SOURCE_ID_BY_SERVICE = {
+    "GitHub": "github",
+    "GitLab": "gitlab",
+    "DEV Community": "dev-to",
+    "Hacker News": "hacker-news",
+    "Bluesky": "bluesky",
+    "Reddit": "reddit",
+    "Codeberg": "codeberg",
+    "Hugging Face": "huggingface",
+    "HackerOne": "hackerone",
+    "Bugcrowd": "bugcrowd",
+    "YesWeHack": "yeswehack",
+    "Intigriti": "intigriti",
+    "Mastodon.social": "mastodon.social",
+    **{f"Mastodon ({instance})": instance for instance in MASTODON_INSTANCES[1:]},
+}
+USERNAME_SEARCH_SOURCES = (
+    ("Instagram", "site:instagram.com/{user}"),
+    ("TikTok", "site:tiktok.com/@{user}"),
+    ("X", "site:x.com/{user} OR site:twitter.com/{user}"),
+    ("Threads", "site:threads.net/@{user}"),
+    ("Bluesky", "site:bsky.app/profile/{user}"),
+    ("Mastodon", "{mastodon_query}"),
+    ("Reddit", "site:reddit.com/user/{user}"),
+    ("YouTube", "site:youtube.com/@{user}"),
+    ("Twitch", "site:twitch.tv/{user}"),
+    ("Telegram", "site:t.me/{user}"),
+    ("Pinterest", "site:pinterest.com/{user}"),
+    ("Medium", "site:medium.com/@{user}"),
+    ("LinkedIn", "site:linkedin.com/in {term}"),
+    ("GitHub", "site:github.com/{user}"),
+    ("GitLab", "site:gitlab.com/{user}"),
+    ("Codeberg", "site:codeberg.org/{user}"),
+    ("Hugging Face", "site:huggingface.co/{user}"),
+    ("DEV Community", "site:dev.to/{user}"),
+    ("Stack Overflow", "site:stackoverflow.com/users {term}"),
+    ("Hacker News", "site:news.ycombinator.com/user?id={user}"),
+    ("HackerOne", "site:hackerone.com/{user}"),
+    ("Bugcrowd", "site:bugcrowd.com/h/{user}"),
+    ("YesWeHack", "site:yeswehack.com/hunters/{user}"),
+    ("Intigriti", "site:app.intigriti.com/profile/{user}"),
+    ("TryHackMe", "site:tryhackme.com/p/{user}"),
+    ("Hack The Box", "site:app.hackthebox.com/profile/{user}"),
+    ("Wellfound", "site:wellfound.com/u/{user}"),
+    ("Indeed", "site:indeed.com {term}"),
+    ("DuckDuckGo", "{term}"),
+    ("Google", "{term}"),
+    ("Bing", "{term}"),
 )
 KEYRING_SERVICE = "open-osint-kit"
 KEYRING_USERNAME = "shodan-api-key"
@@ -311,12 +386,20 @@ def _shodan_search_error(error: HTTPError) -> str:
     }.get(error.code, f"Shodan request failed with HTTP {error.code}.")
 
 
-def shodan_cache_directory() -> Path:
+def application_cache_directory() -> Path:
     if os.name == "nt":
         base = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
     else:
         base = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
-    return base / "open-osint-kit" / "shodan"
+    return base / "open-osint-kit"
+
+
+def shodan_cache_directory() -> Path:
+    return application_cache_directory() / "shodan"
+
+
+def profile_cache_directory() -> Path:
+    return application_cache_directory() / "profiles"
 
 
 def _shodan_cache_path(
@@ -389,17 +472,21 @@ def _write_shodan_cache(
                 pass
 
 
-def clear_shodan_cache() -> int:
+def clear_lookup_cache() -> int:
     try:
-        shutil.rmtree(shodan_cache_directory())
+        shutil.rmtree(application_cache_directory())
     except FileNotFoundError:
-        CONSOLE.print("[warning]No Shodan cache was found.[/warning]")
+        CONSOLE.print("[warning]No lookup cache was found.[/warning]")
         return 0
     except OSError as error:
-        ERROR_CONSOLE.print(f"[error]Could not clear the Shodan cache: {error}[/error]")
+        ERROR_CONSOLE.print(f"[error]Could not clear lookup caches: {error}[/error]")
         return 1
-    CONSOLE.print("[success]Shodan cache cleared.[/success]")
+    CONSOLE.print("[success]Lookup caches cleared.[/success]")
     return 0
+
+
+def clear_shodan_cache() -> int:
+    return clear_lookup_cache()
 
 
 def _shodan_host_summary(match: object) -> dict | None:
@@ -754,44 +841,17 @@ def build_search_report(target: str, kind: str) -> dict:
     term = f'"{target}"'
     if kind == "username":
         path_username = quote(target, safe="._-")
+        mastodon_query = "(" + " OR ".join(
+            f"site:{instance}/@{path_username}"
+            for instance in MASTODON_INSTANCES
+        ) + ")"
         queries = [
-            ("Instagram", f"site:instagram.com/{path_username}"),
-            ("TikTok", f"site:tiktok.com/@{path_username}"),
-            ("X", f"site:x.com/{path_username} OR site:twitter.com/{path_username}"),
-            ("Threads", f"site:threads.net/@{path_username}"),
-            ("Bluesky", f"site:bsky.app/profile/{path_username}"),
-            (
-                "Mastodon",
-                "(" + " OR ".join(
-                    f"site:{instance}/@{path_username}"
-                    for instance in MASTODON_INSTANCES
-                ) + ")",
-            ),
-            ("Reddit", f"site:reddit.com/user/{path_username}"),
-            ("YouTube", f"site:youtube.com/@{path_username}"),
-            ("Twitch", f"site:twitch.tv/{path_username}"),
-            ("Telegram", f"site:t.me/{path_username}"),
-            ("Pinterest", f"site:pinterest.com/{path_username}"),
-            ("Medium", f"site:medium.com/@{path_username}"),
-            ("LinkedIn", f"site:linkedin.com/in {term}"),
-            ("GitHub", f"site:github.com/{path_username}"),
-            ("GitLab", f"site:gitlab.com/{path_username}"),
-            ("Codeberg", f"site:codeberg.org/{path_username}"),
-            ("Hugging Face", f"site:huggingface.co/{path_username}"),
-            ("DEV Community", f"site:dev.to/{path_username}"),
-            ("Stack Overflow", f"site:stackoverflow.com/users {term}"),
-            ("Hacker News", f"site:news.ycombinator.com/user?id={path_username}"),
-            ("HackerOne", f"site:hackerone.com/{path_username}"),
-            ("Bugcrowd", f"site:bugcrowd.com/h/{path_username}"),
-            ("YesWeHack", f"site:yeswehack.com/hunters/{path_username}"),
-            ("Intigriti", f"site:app.intigriti.com/profile/{path_username}"),
-            ("TryHackMe", f"site:tryhackme.com/p/{path_username}"),
-            ("Hack The Box", f"site:app.hackthebox.com/profile/{path_username}"),
-            ("Wellfound", f"site:wellfound.com/u/{path_username}"),
-            ("Indeed", f"site:indeed.com {term}"),
-            ("DuckDuckGo", term),
-            ("Google", term),
-            ("Bing", term),
+            (source, template.format(
+                user=path_username,
+                term=term,
+                mastodon_query=mastodon_query,
+            ))
+            for source, template in USERNAME_SEARCH_SOURCES
         ]
     elif kind in {"organization", "company"}:
         queries = [
@@ -912,32 +972,213 @@ def mastodon_webfinger_matches(data: object, username: str, instance: str) -> bo
     )
 
 
+def _profile_cache_path(
+    username: str, source_id: str, cache_dir: Path | None = None
+) -> Path:
+    cache_key = hashlib.sha256(
+        f"{username.casefold()}\0{source_id}".encode("utf-8")
+    ).hexdigest()
+    return (cache_dir or profile_cache_directory()) / f"{cache_key}.json"
+
+
+def _read_profile_cache(
+    username: str,
+    source_id: str,
+    cache_ttl: int,
+    cache_dir: Path | None = None,
+) -> dict | None:
+    if cache_ttl <= 0:
+        return None
+    cache_path = _profile_cache_path(username, source_id, cache_dir)
+    try:
+        cached = json.loads(cache_path.read_text(encoding="utf-8"))
+        saved_at = float(cached["saved_at"])
+        checked_at = str(cached["checked_at"])
+        status = str(cached["status"])
+    except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+        return None
+    age = time.time() - saved_at
+    if age < 0 or age > cache_ttl or status not in {"confirmed", "not_found"}:
+        try:
+            cache_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return None
+    return {
+        "status": status,
+        "checked_at": checked_at,
+        "age_seconds": int(age),
+    }
+
+
+def _write_profile_cache(
+    username: str,
+    source_id: str,
+    status: str,
+    checked_at: str,
+    cache_dir: Path | None = None,
+) -> None:
+    if status not in {"confirmed", "not_found"}:
+        return
+    cache_path = _profile_cache_path(username, source_id, cache_dir)
+    temporary_path = None
+    try:
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=cache_path.parent,
+            prefix=".profile-",
+            suffix=".tmp",
+            delete=False,
+        ) as cache_file:
+            temporary_path = Path(cache_file.name)
+            json.dump({
+                "saved_at": time.time(),
+                "checked_at": checked_at,
+                "status": status,
+            }, cache_file)
+        if os.name != "nt":
+            os.chmod(temporary_path, 0o600)
+        os.replace(temporary_path, cache_path)
+    except OSError:
+        if temporary_path is not None:
+            try:
+                temporary_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+
+def _profile_lookup_with_retry(lookup: Callable[[], bool]) -> bool:
+    for attempt in range(2):
+        try:
+            return lookup()
+        except HTTPError as error:
+            retry_after = error.headers.get("Retry-After") if error.headers else None
+            if attempt or error.code not in {429, 500, 502, 503, 504}:
+                raise
+            if error.code == 429:
+                try:
+                    delay = float(retry_after)
+                except (TypeError, ValueError):
+                    raise error
+                if not 0 <= delay <= 5:
+                    raise error
+            else:
+                delay = 0.5
+            time.sleep(delay)
+    return False
+
+
 def probe_profile(
+    username: str,
+    source_id: str,
     service: str,
     category: str,
     profile_url: str,
+    lookup_url: str,
+    match_method: str,
     lookup: Callable[[], bool],
+    cache_ttl: int,
+    cache_dir: Path | None = None,
 ) -> dict:
-    status = "not_found"
-    try:
-        found = lookup()
-    except HTTPError as error:
-        status = "not_found" if error.code == 404 else "unavailable"
-    except (URLError, TimeoutError, OSError, ValueError, TypeError, AttributeError):
-        status = "unavailable"
+    cached = _read_profile_cache(username, source_id, cache_ttl, cache_dir)
+    if cached is not None:
+        status = cached["status"]
+        checked_at = cached["checked_at"]
+        cache_metadata = {
+            "status": "hit",
+            "age_seconds": cached["age_seconds"],
+            "ttl_seconds": cache_ttl,
+        }
     else:
-        status = "confirmed" if found else "not_found"
+        checked_at = datetime.now(timezone.utc).isoformat()
+        cache_metadata = {
+            "status": "miss" if cache_ttl > 0 else "disabled",
+            "ttl_seconds": cache_ttl,
+        }
+        try:
+            found = _profile_lookup_with_retry(lookup)
+            status = "confirmed" if found else "not_found"
+        except HTTPError as error:
+            status = "not_found" if error.code == 404 else "unavailable"
+            if status == "unavailable":
+                cache_metadata["detail"] = f"HTTP {error.code}"
+        except (URLError, TimeoutError, OSError, ValueError, TypeError, AttributeError) as error:
+            status = "unavailable"
+            cache_metadata["detail"] = type(error).__name__
+        if status != "unavailable" and cache_ttl > 0:
+            _write_profile_cache(
+                username, source_id, status, checked_at, cache_dir
+            )
     return {
+        "source_id": source_id,
         "service": service,
         "category": category,
         "status": status,
         "profile_url": profile_url,
+        "lookup_url": lookup_url,
+        "match_method": match_method,
+        "checked_at": checked_at,
+        "cache": cache_metadata,
     }
 
 
+def _select_profile_source_ids(
+    groups: list[str] | None,
+    sources: list[str] | None,
+) -> set[str]:
+    requested_groups = set(groups or [])
+    requested_sources = set(sources or [])
+    if requested_groups and requested_sources:
+        raise ValueError("choose profile groups or sources, not both")
+    unknown_groups = requested_groups - set(PROFILE_GROUPS)
+    if unknown_groups:
+        raise ValueError(f"unknown profile group: {', '.join(sorted(unknown_groups))}")
+    unknown_sources = requested_sources - set(PROFILE_SOURCE_GROUPS)
+    if unknown_sources:
+        raise ValueError(f"unknown profile source: {', '.join(sorted(unknown_sources))}")
+    if requested_groups:
+        return {
+            source_id
+            for source_id, source_groups in PROFILE_SOURCE_GROUPS.items()
+            if requested_groups.intersection(source_groups)
+        }
+    if requested_sources:
+        return requested_sources
+    return set(PROFILE_SOURCE_GROUPS)
+
+
+def _profile_match_method(source_id: str) -> str:
+    if source_id.startswith("mastodon.") or source_id in {
+        "mstdn.social",
+        "fosstodon.org",
+        "infosec.exchange",
+    }:
+        return "exact WebFinger account subject and ActivityPub profile link"
+    if source_id == "hackerone":
+        return "exact canonical public profile path"
+    return "exact username or account handle"
+
+
 def build_profile_report(
-    username: str, timeout: int, include_unconfirmed: bool = False
+    username: str,
+    timeout: int,
+    include_unconfirmed: bool = False,
+    *,
+    groups: list[str] | None = None,
+    sources: list[str] | None = None,
+    cache_ttl: int = PROFILE_DEFAULT_CACHE_TTL,
+    workers: int = PROFILE_DEFAULT_WORKERS,
+    cache_dir: Path | None = None,
 ) -> dict:
+    if not 1 <= timeout <= 30:
+        raise ValueError("timeout must be between 1 and 30 seconds")
+    if not 0 <= cache_ttl <= PROFILE_MAX_CACHE_TTL:
+        raise ValueError(f"cache_ttl must be between 0 and {PROFILE_MAX_CACHE_TTL} seconds")
+    if not 1 <= workers <= PROFILE_MAX_WORKERS:
+        raise ValueError(f"workers must be between 1 and {PROFILE_MAX_WORKERS}")
+    selected_source_ids = _select_profile_source_ids(groups, sources)
     encoded_username = quote(username, safe="")
     bluesky_handle = username if "." in username else f"{username}.bsky.social"
     profiles = [
@@ -1057,10 +1298,19 @@ def build_profile_report(
             ),
         ))
 
+    profiles = [
+        profile
+        for profile in profiles
+        if PROFILE_SOURCE_ID_BY_SERVICE[profile[0]] in selected_source_ids
+    ]
+    if not profiles:
+        raise ValueError("no profile sources were selected")
+
     results = {}
-    with ThreadPoolExecutor(max_workers=len(profiles)) as executor:
+    with ThreadPoolExecutor(max_workers=min(workers, len(profiles))) as executor:
         futures = {}
         for service, category, profile_url, api_url, matches in profiles:
+            source_id = PROFILE_SOURCE_ID_BY_SERVICE[service]
             if api_url is None:
                 lookup = matches
             elif ".well-known/webfinger" in api_url:
@@ -1073,14 +1323,27 @@ def build_profile_report(
                 )
             else:
                 lookup = lambda api_url=api_url, matches=matches: matches(fetch_json(api_url, timeout))
-            futures[executor.submit(probe_profile, service, category, profile_url, lookup)] = service
+            match_method = _profile_match_method(source_id)
+            futures[executor.submit(
+                probe_profile,
+                username,
+                source_id,
+                service,
+                category,
+                profile_url,
+                api_url or profile_url,
+                match_method,
+                lookup,
+                cache_ttl,
+                cache_dir,
+            )] = source_id
         for future in as_completed(futures):
             results[futures[future]] = future.result()
 
     profile_checks = [
-        results[service]
+        results[PROFILE_SOURCE_ID_BY_SERVICE[service]]
         for service, _, _, _, _ in profiles
-        if results.get(service) is not None
+        if PROFILE_SOURCE_ID_BY_SERVICE[service] in results
     ]
     profile_results = [item for item in profile_checks if item["status"] == "confirmed"]
     category_priority = {
@@ -1096,13 +1359,20 @@ def build_profile_report(
     profile_results.sort(key=lambda item: category_priority.get(item["category"], 99))
     unavailable = sum(item["status"] == "unavailable" for item in profile_checks)
     not_found = sum(item["status"] == "not_found" for item in profile_checks)
+    cache_hits = sum(item["cache"]["status"] == "hit" for item in profile_checks)
     report = {
         "target": username,
         "target_type": "username",
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "mode": "confirmed public profile matches only",
+        "selected_sources": [item["source_id"] for item in profile_checks],
+        "selected_groups": sorted(set(groups or [])),
         "results": profile_results,
-        "summary": {"confirmed": len(profile_results)},
+        "summary": {
+            "sources_checked": len(profile_checks),
+            "confirmed": len(profile_results),
+            "cache_hits": cache_hits,
+        },
         "notice": "only exact confirmed username matches are listed; a match does not prove shared ownership",
     }
     if include_unconfirmed:
@@ -1113,12 +1383,150 @@ def build_profile_report(
             "confirmed": len(profile_results),
             "not_found": not_found,
             "unavailable": unavailable,
+            "cache_hits": cache_hits,
         }
         report["notice"] = (
             "results include exact confirmed username matches; checks distinguish "
             "missing profiles from unavailable services; a match does not prove shared ownership"
         )
     return report
+
+
+def load_profile_usernames(path: str) -> list[str]:
+    try:
+        contents = Path(path).read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as error:
+        raise argparse.ArgumentTypeError(
+            f"could not read username file {path}: {error}"
+        ) from error
+    if len(contents) > 1_000_000:
+        raise argparse.ArgumentTypeError("username file exceeds the 1 MB size limit")
+    usernames = []
+    seen = set()
+    for line_number, line in enumerate(contents.splitlines(), start=1):
+        value = line.strip()
+        if not value or value.startswith("#"):
+            continue
+        try:
+            username = valid_username(value)
+        except argparse.ArgumentTypeError as error:
+            raise argparse.ArgumentTypeError(
+                f"invalid username on line {line_number}: {error}"
+            ) from error
+        normalized = username.casefold()
+        if normalized not in seen:
+            seen.add(normalized)
+            usernames.append(username)
+            if len(usernames) > PROFILE_BATCH_MAX:
+                raise argparse.ArgumentTypeError(
+                    f"username file exceeds the {PROFILE_BATCH_MAX} username limit"
+                )
+    if not usernames:
+        raise argparse.ArgumentTypeError("username file contains no usernames")
+    return usernames
+
+
+def build_profiles_batch_report(
+    usernames: list[str],
+    timeout: int,
+    include_unconfirmed: bool = False,
+    *,
+    groups: list[str] | None = None,
+    sources: list[str] | None = None,
+    cache_ttl: int = PROFILE_DEFAULT_CACHE_TTL,
+    workers: int = PROFILE_DEFAULT_WORKERS,
+    cache_dir: Path | None = None,
+) -> dict:
+    normalized_usernames = []
+    seen = set()
+    for value in usernames:
+        username = valid_username(value)
+        normalized = username.casefold()
+        if normalized not in seen:
+            seen.add(normalized)
+            normalized_usernames.append(username)
+    if not normalized_usernames:
+        raise ValueError("at least one username is required")
+    if len(normalized_usernames) > PROFILE_BATCH_MAX:
+        raise ValueError(f"batch size must not exceed {PROFILE_BATCH_MAX} usernames")
+    if not 1 <= timeout <= 30:
+        raise ValueError("timeout must be between 1 and 30 seconds")
+    if not 0 <= cache_ttl <= PROFILE_MAX_CACHE_TTL:
+        raise ValueError(f"cache_ttl must be between 0 and {PROFILE_MAX_CACHE_TTL} seconds")
+    if not 1 <= workers <= PROFILE_MAX_WORKERS:
+        raise ValueError(f"workers must be between 1 and {PROFILE_MAX_WORKERS}")
+    _select_profile_source_ids(groups, sources)
+
+    confirmed_profiles = []
+    all_checks = []
+    users_with_matches = 0
+    sources_checked = []
+    user_reports = {}
+    with ThreadPoolExecutor(max_workers=min(workers, len(normalized_usernames))) as executor:
+        future_usernames = {
+            executor.submit(
+                build_profile_report,
+                username,
+                timeout,
+                include_unconfirmed,
+                groups=groups,
+                sources=sources,
+                cache_ttl=cache_ttl,
+                workers=1,
+                cache_dir=cache_dir,
+            ): username
+            for username in normalized_usernames
+        }
+        for future in as_completed(future_usernames):
+            user_reports[future_usernames[future]] = future.result()
+
+    for username in normalized_usernames:
+        report = user_reports[username]
+        if report["results"]:
+            users_with_matches += 1
+        confirmed_profiles.extend(
+            {"username": username, **profile}
+            for profile in report["results"]
+        )
+        sources_checked = report["selected_sources"]
+        if include_unconfirmed:
+            all_checks.extend(
+                {"username": username, **check}
+                for check in report.get("checks", [])
+            )
+
+    summary = {
+        "usernames_checked": len(normalized_usernames),
+        "users_with_matches": users_with_matches,
+        "confirmed_profiles": len(confirmed_profiles),
+    }
+    batch_report = {
+        "target": "username batch",
+        "target_type": "username_batch",
+        "targets": normalized_usernames,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "mode": "confirmed public profile matches only",
+        "selected_sources": sources_checked,
+        "selected_groups": sorted(set(groups or [])),
+        "results": confirmed_profiles,
+        "summary": summary,
+        "notice": "only exact confirmed username matches are listed; matching handles do not prove shared ownership",
+    }
+    if include_unconfirmed:
+        batch_report["checks"] = all_checks
+        batch_report["mode"] = "exact public profile checks; availability is reported per source"
+        batch_report["summary"] = {
+            **summary,
+            "sources_checked": len(all_checks),
+            "not_found": sum(item["status"] == "not_found" for item in all_checks),
+            "unavailable": sum(item["status"] == "unavailable" for item in all_checks),
+            "cache_hits": sum(item["cache"]["status"] == "hit" for item in all_checks),
+        }
+        batch_report["notice"] = (
+            "results include exact confirmed username matches; checks distinguish "
+            "missing profiles from unavailable services; matching handles do not prove shared ownership"
+        )
+    return batch_report
 
 
 def build_phone_report(value: str) -> dict:
@@ -1481,7 +1889,149 @@ def _collect_report_changes(before: object, after: object, path: str = "") -> li
     return []
 
 
+def _profile_match_index(report: dict) -> dict[tuple[str, str], dict]:
+    report_target = str(report.get("target", ""))
+    matches = {}
+    for result in report.get("results", []):
+        if not isinstance(result, dict) or result.get("status", "confirmed") != "confirmed":
+            continue
+        username = str(result.get("username", report_target)).casefold()
+        service_name = str(result.get("service") or "")
+        source_id = result.get("source_id") or PROFILE_SOURCE_ID_BY_SERVICE.get(
+            service_name, service_name
+        )
+        service = str(source_id).casefold()
+        if username and service:
+            matches[(username, service)] = result
+    return matches
+
+
+def _profile_check_status_index(report: dict) -> dict[tuple[str, str], str]:
+    report_target = str(report.get("target", ""))
+    statuses = {}
+    for check in report.get("checks", []):
+        if not isinstance(check, dict):
+            continue
+        username = str(check.get("username", report_target)).casefold()
+        service_name = str(check.get("service") or "")
+        source_id = check.get("source_id") or PROFILE_SOURCE_ID_BY_SERVICE.get(
+            service_name, service_name
+        )
+        source_id = str(source_id).casefold()
+        status = check.get("status")
+        if username and source_id and status in {"confirmed", "not_found", "unavailable"}:
+            statuses[(username, source_id)] = status
+    return statuses
+
+
+def _profile_report_coverage(report: dict) -> tuple[set[str], set[str]]:
+    raw_targets = report.get("targets")
+    if isinstance(raw_targets, list):
+        targets = {str(target).casefold() for target in raw_targets}
+    else:
+        target = report.get("target")
+        targets = {str(target).casefold()} if target else set()
+    raw_sources = report.get("selected_sources")
+    if isinstance(raw_sources, list):
+        sources = {str(source).casefold() for source in raw_sources}
+    else:
+        sources = set(PROFILE_SOURCE_GROUPS)
+    return targets, sources
+
+
+def _profile_change_row(key: tuple[str, str], result: dict) -> dict:
+    return {
+        "username": result.get("username", key[0]),
+        "source_id": result.get("source_id", key[1]),
+        "service": result.get("service"),
+        "profile_url": result.get("profile_url"),
+    }
+
+
+def build_profile_report_diff(before: dict, after: dict) -> dict:
+    before_matches = _profile_match_index(before)
+    after_matches = _profile_match_index(after)
+    before_statuses = _profile_check_status_index(before)
+    after_statuses = _profile_check_status_index(after)
+    before_targets, before_sources = _profile_report_coverage(before)
+    after_targets, after_sources = _profile_report_coverage(after)
+    added = []
+    removed = []
+    newly_checked = []
+    not_rechecked = []
+    unchanged = 0
+
+    for key, result in after_matches.items():
+        if key in before_matches:
+            unchanged += 1
+        elif (
+            key[0] in before_targets
+            and key[1] in before_sources
+            and before_statuses.get(key) != "unavailable"
+        ):
+            added.append(_profile_change_row(key, result))
+        else:
+            newly_checked.append(_profile_change_row(key, result))
+
+    for key, result in before_matches.items():
+        if key in after_matches:
+            continue
+        row = _profile_change_row(key, result)
+        if (
+            key[0] in after_targets
+            and key[1] in after_sources
+            and after_statuses.get(key) == "unavailable"
+        ):
+            not_rechecked.append(row)
+        elif key[0] in after_targets and key[1] in after_sources:
+            removed.append(row)
+        else:
+            not_rechecked.append(row)
+
+    sort_key = lambda row: (
+        str(row.get("username", "")).casefold(),
+        str(row.get("source_id", "")).casefold(),
+    )
+    added.sort(key=sort_key)
+    removed.sort(key=sort_key)
+    newly_checked.sort(key=sort_key)
+    not_rechecked.sort(key=sort_key)
+    before_label = before.get("target", f"{len(before_targets)} usernames")
+    after_label = after.get("target", f"{len(after_targets)} usernames")
+    summary = {
+        "added": len(added),
+        "removed": len(removed),
+        "unchanged": unchanged,
+        "newly_checked": len(newly_checked),
+        "not_rechecked": len(not_rechecked),
+    }
+    return {
+        "comparison": "confirmed profile diff",
+        "before_target": before_label,
+        "after_target": after_label,
+        "added_profiles": added,
+        "removed_profiles": removed,
+        "newly_checked_profiles": newly_checked,
+        "not_rechecked_profiles": not_rechecked,
+        "unchanged_profiles": unchanged,
+        "summary": summary,
+        "mode": (
+            "local comparison of confirmed matches; unavailable checks and sources omitted "
+            "from either report are not treated as removals. Without per-source checks, "
+            "removed means the profile is no longer confirmed in the newer report."
+        ),
+    }
+
+
 def build_report_diff(before: dict, after: dict) -> dict:
+    profile_report_types = {"username", "username_batch"}
+    if (
+        before.get("target_type") in profile_report_types
+        and after.get("target_type") in profile_report_types
+        and isinstance(before.get("results"), list)
+        and isinstance(after.get("results"), list)
+    ):
+        return build_profile_report_diff(before, after)
     changes = _collect_report_changes(before, after)
     return {
         "comparison": "OSINT report diff",
@@ -1532,8 +2082,34 @@ def main() -> int:
     search_parser.add_argument("--kind", choices=("username", "person", "organization", "company"), required=True)
     add_report_output_options(search_parser)
     profiles_parser = subparsers.add_parser("profiles", help="Check public profile presence for one username")
-    profiles_parser.add_argument("username", type=valid_username, help="single username to check")
+    profiles_parser.add_argument("username", nargs="?", type=valid_username, help="username to check (omit when using --file)")
+    profiles_parser.add_argument("--file", dest="username_file", help="UTF-8 file with up to 50 usernames, one per line")
     profiles_parser.add_argument("--timeout", type=int, default=10, help="timeout per service, in seconds (1-30)")
+    profile_selectors = profiles_parser.add_mutually_exclusive_group()
+    profile_selectors.add_argument(
+        "--group",
+        action="append",
+        choices=PROFILE_GROUPS,
+        help="source group: social, developer, or security (repeatable)",
+    )
+    profile_selectors.add_argument(
+        "--source",
+        action="append",
+        choices=tuple(PROFILE_SOURCE_GROUPS),
+        help="specific source ID; repeat to select multiple sources",
+    )
+    profiles_parser.add_argument(
+        "--cache-ttl",
+        type=int,
+        default=PROFILE_DEFAULT_CACHE_TTL,
+        help=f"profile result cache lifetime in seconds (0 disables cache; max {PROFILE_MAX_CACHE_TTL})",
+    )
+    profiles_parser.add_argument(
+        "--workers",
+        type=int,
+        default=PROFILE_DEFAULT_WORKERS,
+        help=f"maximum concurrent source requests (1-{PROFILE_MAX_WORKERS})",
+    )
     profiles_parser.add_argument(
         "--include-unconfirmed",
         action="store_true",
@@ -1553,7 +2129,7 @@ def main() -> int:
     config_actions.add_parser("remove-shodan-key", help="remove the stored Shodan API key")
     config_actions.add_parser("status", help="show whether a Shodan API key is configured")
     config_actions.add_parser("test-shodan", help="validate the Shodan API key and show safe account quotas")
-    config_actions.add_parser("clear-cache", help="delete cached Shodan search results")
+    config_actions.add_parser("clear-cache", help="delete cached Shodan and profile lookup results")
     shodan_parser = subparsers.add_parser("shodan", help="Look up passive Shodan metadata for one public IP")
     shodan_parser.add_argument("target", type=valid_public_ip, help="public IPv4 or IPv6 address")
     shodan_parser.add_argument("--timeout", type=int, default=10, help="request timeout, in seconds (1-30)")
@@ -1592,8 +2168,15 @@ def main() -> int:
         parser.error("--timeout must be between 1 and 30 seconds")
     if args.command in {"shodan", "shodan-range", "asn"} and not 0 <= args.cache_ttl <= 86400:
         parser.error("--cache-ttl must be between 0 and 86400 seconds")
-    if args.command == "profiles" and not 1 <= args.timeout <= 30:
-        parser.error("--timeout must be between 1 and 30 seconds")
+    if args.command == "profiles":
+        if bool(args.username) == bool(args.username_file):
+            parser.error("provide one username or use --file, but not both")
+        if not 1 <= args.timeout <= 30:
+            parser.error("--timeout must be between 1 and 30 seconds")
+        if not 0 <= args.cache_ttl <= PROFILE_MAX_CACHE_TTL:
+            parser.error(f"--cache-ttl must be between 0 and {PROFILE_MAX_CACHE_TTL} seconds")
+        if not 1 <= args.workers <= PROFILE_MAX_WORKERS:
+            parser.error(f"--workers must be between 1 and {PROFILE_MAX_WORKERS}")
     if args.command == "domain":
         report = build_report(args.target, args.timeout)
     elif args.command == "ip":
@@ -1609,9 +2192,34 @@ def main() -> int:
         except argparse.ArgumentTypeError as error:
             parser.error(str(error))
     elif args.command == "profiles":
-        report = build_profile_report(
-            args.username, args.timeout, args.include_unconfirmed
-        )
+        try:
+            usernames = (
+                [args.username]
+                if args.username
+                else load_profile_usernames(args.username_file)
+            )
+            profile_options = {
+                "groups": args.group,
+                "sources": args.source,
+                "cache_ttl": args.cache_ttl,
+                "workers": args.workers,
+            }
+            if args.username:
+                report = build_profile_report(
+                    args.username,
+                    args.timeout,
+                    args.include_unconfirmed,
+                    **profile_options,
+                )
+            else:
+                report = build_profiles_batch_report(
+                    usernames,
+                    args.timeout,
+                    args.include_unconfirmed,
+                    **profile_options,
+                )
+        except (argparse.ArgumentTypeError, ValueError) as error:
+            parser.error(str(error))
     elif args.command == "shodan":
         api_key = get_shodan_api_key()
         if not api_key:

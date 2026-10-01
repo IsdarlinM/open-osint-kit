@@ -1,4 +1,4 @@
-# Open OSINT Kit 1.7.2
+# Open OSINT Kit 1.8.0
 
 ![Open OSINT Kit: open-source intelligence](assets/banner.svg)
 
@@ -14,7 +14,7 @@ Cross-platform Python CLI for authorized research into domains, infrastructure, 
 
 `search` generates manual search links for usernames, people, companies, and organizations. It does not scrape profiles, collect search results, or verify identities.
 
-`profiles` checks a username against public APIs for GitHub, GitLab, DEV Community, Hacker News, Bluesky, Reddit, Codeberg, Hugging Face, HackerOne, Bugcrowd, YesWeHack, and Intigriti. It checks Mastodon accounts through WebFinger on mastodon.social, mastodon.online, mstdn.social, fosstodon.org, infosec.exchange, and mastodon.world. By default, it lists only exact confirmed matches with their category and profile URL. Add `--include-unconfirmed` to also show sources marked `not_found` or `unavailable`. For Bluesky, a username without a domain is checked as `<username>.bsky.social`. Mastodon lookups verify the exact `acct:` subject and ActivityPub profile link.
+`profiles` checks public APIs for GitHub, GitLab, DEV Community, Hacker News, Bluesky, Reddit, Codeberg, Hugging Face, HackerOne, Bugcrowd, YesWeHack, and Intigriti, plus WebFinger on six Mastodon instances. By default, it lists only exact confirmed matches. Use repeatable `--group social|developer|security` or `--source <id>` options to select sources. It also accepts a UTF-8 username file with up to 50 entries using `--file`; blank lines, comments, and duplicate handles are skipped. Use `--workers` to limit concurrent requests, `--cache-ttl` to set a per-source cache lifetime (15 minutes by default, `0` disables caching), and `--include-unconfirmed` to show missing or unavailable checks. Temporary server errors get at most one retry; HTTP 429 is retried only when the server provides a short `Retry-After` value. Each result records its public profile URL, exact-match method, check time, source ID, and cache status. Unavailable checks are never cached. For Bluesky, a username without a domain is checked as `<username>.bsky.social`; Mastodon checks exact WebFinger account subjects.
 
 `phone` validates an international E.164 number and reports its formatting, numbering-plan region, and line type. It does not query carriers, identify owners, or verify that a line is active.
 
@@ -28,9 +28,9 @@ Terminal reports use compact, aligned columns with simple headers. Use `--format
 
 `--update` checks this repository's latest stable release and, when a newer version is available, installs the source archive for that release tag with `pip`. If the version is unchanged, it compares the installed release or commit against `main`; newer commits are installed by SHA. The SHA recorded by `pip` is reused on later checks, so an already-installed commit is not repeatedly reinstalled.
 
-`compare old-report.json new-report.json` produces a local field-level diff and ignores generated timestamps and cache metadata.
+`compare old-report.json new-report.json` produces a local field-level diff and ignores generated timestamps and cache metadata. For profile reports, it compares confirmed profiles and distinguishes additions/removals from sources that were newly selected or not checked again. When reports include `--include-unconfirmed` checks, a source marked unavailable is not treated as a removal; without those checks, a removal means the profile is no longer confirmed in the newer report.
 
-`search --kind username` creates platform-focused search links for Instagram, TikTok, X, Threads, Bluesky, Mastodon, Reddit, YouTube, Twitch, Telegram, Pinterest, Medium, LinkedIn, developer communities, bug bounty sites, and general search engines. These links help find public profile pages on sites without a reliable unauthenticated lookup API; they are search links, not confirmed profile results.
+`search --kind username` creates platform-focused search links for Instagram, TikTok, X, Threads, Bluesky, Mastodon, Reddit, YouTube, Twitch, Telegram, Pinterest, Medium, LinkedIn, developer communities, bug bounty sites, and general search engines. These links help find public profile pages on sites without a reliable unauthenticated lookup API; they are search links, not confirmed profile results. The `USERNAME_SEARCH_SOURCES` registry contains these link templates. Add automated checks only for public endpoints that support exact matching; register their IDs and groups in `PROFILE_SOURCE_GROUPS` rather than scraping sites.
 
 ## Installation
 
@@ -86,6 +86,9 @@ osint-kit search "Jane Example" --kind person
 osint-kit search "Example Inc" --kind company
 osint-kit profiles example_user --timeout 5 --output profiles.json
 osint-kit profiles example_user --include-unconfirmed
+osint-kit profiles example_user --group social
+osint-kit profiles example_user --source github --source reddit
+osint-kit profiles --file usernames.txt --group security --cache-ttl 0
 osint-kit profiles example_user --format csv --output profiles.csv
 osint-kit search example_user --kind username
 osint-kit phone +14155552671
@@ -101,9 +104,9 @@ osint-kit config clear-cache
 osint-kit config remove-shodan-key
 ```
 
-Shodan results are cached per user for five minutes under `%LOCALAPPDATA%\open-osint-kit\shodan` on Windows or `$XDG_CACHE_HOME/open-osint-kit/shodan` (default `~/.cache/open-osint-kit/shodan`) on Linux. Set `--cache-ttl 0` to disable caching; `config clear-cache` removes the cache without deleting reports saved to user-selected paths.
+Shodan results are cached per user for five minutes and profile checks for 15 minutes under `%LOCALAPPDATA%\open-osint-kit` on Windows or `$XDG_CACHE_HOME/open-osint-kit` (default `~/.cache/open-osint-kit`) on Linux. Profile cache files contain a source status and check time, not the username. Set `--cache-ttl 0` on either command to disable its cache; `config clear-cache` removes Shodan and profile caches without deleting reports saved to user-selected paths.
 
-`domain`, `ip`, `profiles`, `shodan`, `shodan-range`, `asn`, `config test-shodan`, and `--update` require an internet connection. `ioc`, `search`, the other `config` actions, and `phone` do not make research lookups; `phone` analyzes numbering-plan metadata locally. The `domain` and `ip` timeouts apply per source, so a full run may take longer than the configured timeout. `profiles` queries supported public endpoints concurrently and marks sources that rate-limit or cannot be reached as `unavailable`.
+`domain`, `ip`, `profiles`, `shodan`, `shodan-range`, `asn`, `config test-shodan`, and `--update` require an internet connection. `ioc`, `search`, the other `config` actions, and `phone` do not make research lookups; `phone` analyzes numbering-plan metadata locally. The `domain` and `ip` timeouts apply per source, so a full run may take longer than the configured timeout. `profiles` queries selected public endpoints concurrently and marks sources that rate-limit or cannot be reached as `unavailable` when `--include-unconfirmed` is used.
 
 ## Tests
 
