@@ -37,7 +37,7 @@ from rich.table import Table
 from rich.theme import Theme
 from rich_argparse import RichHelpFormatter
 
-__version__ = "1.7.1"
+__version__ = "1.7.2"
 USER_AGENT = f"OpenOSINTKit/{__version__} (passive public-source research)"
 GITHUB_RELEASE_API = "https://api.github.com/repos/IsdarlinM/open-osint-kit/releases/latest"
 GITHUB_MAIN_COMMIT_API = "https://api.github.com/repos/IsdarlinM/open-osint-kit/commits/main"
@@ -935,7 +935,9 @@ def probe_profile(
     }
 
 
-def build_profile_report(username: str, timeout: int) -> dict:
+def build_profile_report(
+    username: str, timeout: int, include_unconfirmed: bool = False
+) -> dict:
     encoded_username = quote(username, safe="")
     bluesky_handle = username if "." in username else f"{username}.bsky.social"
     profiles = [
@@ -1094,21 +1096,29 @@ def build_profile_report(username: str, timeout: int) -> dict:
     profile_results.sort(key=lambda item: category_priority.get(item["category"], 99))
     unavailable = sum(item["status"] == "unavailable" for item in profile_checks)
     not_found = sum(item["status"] == "not_found" for item in profile_checks)
-    return {
+    report = {
         "target": username,
         "target_type": "username",
         "generated_at": datetime.now(timezone.utc).isoformat(),
-        "mode": "exact public profile checks; availability is reported per source",
+        "mode": "confirmed public profile matches only",
         "results": profile_results,
-        "checks": profile_checks,
-        "summary": {
+        "summary": {"confirmed": len(profile_results)},
+        "notice": "only exact confirmed username matches are listed; a match does not prove shared ownership",
+    }
+    if include_unconfirmed:
+        report["mode"] = "exact public profile checks; availability is reported per source"
+        report["checks"] = profile_checks
+        report["summary"] = {
             "checked": len(profile_checks),
             "confirmed": len(profile_results),
             "not_found": not_found,
             "unavailable": unavailable,
-        },
-        "notice": "results include exact confirmed username matches; checks distinguish missing profiles from unavailable services; a match does not prove shared ownership",
-    }
+        }
+        report["notice"] = (
+            "results include exact confirmed username matches; checks distinguish "
+            "missing profiles from unavailable services; a match does not prove shared ownership"
+        )
+    return report
 
 
 def build_phone_report(value: str) -> dict:
@@ -1524,6 +1534,11 @@ def main() -> int:
     profiles_parser = subparsers.add_parser("profiles", help="Check public profile presence for one username")
     profiles_parser.add_argument("username", type=valid_username, help="single username to check")
     profiles_parser.add_argument("--timeout", type=int, default=10, help="timeout per service, in seconds (1-30)")
+    profiles_parser.add_argument(
+        "--include-unconfirmed",
+        action="store_true",
+        help="also show sources where the username was not confirmed",
+    )
     add_report_output_options(profiles_parser)
     phone_parser = subparsers.add_parser("phone", help="Validate an international phone number without identifying its owner")
     phone_parser.add_argument("number", help="international E.164 number, for example +14155552671")
@@ -1594,7 +1609,9 @@ def main() -> int:
         except argparse.ArgumentTypeError as error:
             parser.error(str(error))
     elif args.command == "profiles":
-        report = build_profile_report(args.username, args.timeout)
+        report = build_profile_report(
+            args.username, args.timeout, args.include_unconfirmed
+        )
     elif args.command == "shodan":
         api_key = get_shodan_api_key()
         if not api_key:

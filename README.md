@@ -1,4 +1,4 @@
-# Open OSINT Kit 1.7.1
+# Open OSINT Kit 1.7.2
 
 ![Open OSINT Kit: open-source intelligence](assets/banner.svg)
 
@@ -14,7 +14,7 @@ Cross-platform Python CLI for authorized research into domains, infrastructure, 
 
 `search` generates manual search links for usernames, people, companies, and organizations. It does not scrape profiles, collect search results, or verify identities.
 
-`profiles` checks a username against public APIs for GitHub, GitLab, DEV Community, Hacker News, Bluesky, Reddit, Codeberg, Hugging Face, HackerOne, Bugcrowd, YesWeHack, and Intigriti. It checks Mastodon accounts through WebFinger on mastodon.social, mastodon.online, mstdn.social, fosstodon.org, infosec.exchange, and mastodon.world. Confirmed matches include the category and profile URL. The `checks` table reports each source as `confirmed`, `not_found`, or `unavailable`, so an unreachable or rate-limited API is not mistaken for a missing account. For Bluesky, a username without a domain is checked as `<username>.bsky.social`. Mastodon lookups verify the exact `acct:` subject and ActivityPub profile link.
+`profiles` checks a username against public APIs for GitHub, GitLab, DEV Community, Hacker News, Bluesky, Reddit, Codeberg, Hugging Face, HackerOne, Bugcrowd, YesWeHack, and Intigriti. It checks Mastodon accounts through WebFinger on mastodon.social, mastodon.online, mstdn.social, fosstodon.org, infosec.exchange, and mastodon.world. By default, it lists only exact confirmed matches with their category and profile URL. Add `--include-unconfirmed` to also show sources marked `not_found` or `unavailable`. For Bluesky, a username without a domain is checked as `<username>.bsky.social`. Mastodon lookups verify the exact `acct:` subject and ActivityPub profile link.
 
 `phone` validates an international E.164 number and reports its formatting, numbering-plan region, and line type. It does not query carriers, identify owners, or verify that a line is active.
 
@@ -85,6 +85,7 @@ osint-kit search example_user --kind username --output search.json
 osint-kit search "Jane Example" --kind person
 osint-kit search "Example Inc" --kind company
 osint-kit profiles example_user --timeout 5 --output profiles.json
+osint-kit profiles example_user --include-unconfirmed
 osint-kit profiles example_user --format csv --output profiles.csv
 osint-kit search example_user --kind username
 osint-kit phone +14155552671
@@ -110,4 +111,4 @@ Run the local suite with `python -m unittest discover -s tests -v`. GitHub Actio
 
 ## Responsible Use
 
-Use the kit only for legitimate, authorized research. It does not scan ports, authenticate, or exploit systems. `search` provides links that the user chooses whether to open and is limited to public/professional sources; `profiles` sends the supplied username to its supported public endpoints, lists exact matches in `results`, and reports source availability separately in `checks` without retaining profile details. A match does not prove that accounts belong to the same person. `phone` does not identify the owner. Do not use the tool to locate people or collect home addresses, private data, family details, or sensitive information. URLs with query strings are rejected to reduce the risk of exposing tokens or secrets. Public data may be incomplete, outdated, or subject to terms of use; verify findings before relying on them.
+Use the kit only for legitimate, authorized research. It does not scan ports, authenticate, or exploit systems. `search` provides links that the user chooses whether to open and is limited to public/professional sources; `profiles` sends the supplied username to its supported public endpoints and lists exact matches by default. `--include-unconfirmed` also displays source availability without retaining profile details. A match does not prove that accounts belong to the same person. `phone` does not identify the owner. Do not use the tool to locate people or collect home addresses, private data, family details, or sensitive information. URLs with query strings are rejected to reduce the risk of exposing tokens or secrets. Public data may be incomplete, outdated, or subject to terms of use; verify findings before relying on them.
