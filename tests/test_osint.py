@@ -4,10 +4,144 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, urlsplit
 
 import osint
+
+
+class PublicLookupTests(unittest.TestCase):
+    def test_dns_falls_back_to_google(self):
+        response = {"Status": 0, "Answer": [{"data": "93.184.216.34"}, "invalid"]}
+        with patch.object(
+            osint,
+            "fetch_json",
+            side_effect=[URLError("Cloudflare unavailable"), response],
+        ) as fetch:
+            result = osint.lookup_dns("example.org", "A", 5)
+        self.assertEqual(fetch.call_count, 2)
+        self.assertIn("dns.google", fetch.call_args_list[1].args[0])
+        self.assertEqual(result["provider"], "Google")
+        self.assertEqual(result["answers"], ["93.184.216.34"])
+
+    def test_certificate_lookup_falls_back_to_cert_spotter(self):
+        response = [{
+            "id": "123",
+            "dns_names": ["example.org", "www.example.org"],
+            "issuer": {"name": "Example CA"},
+            "not_before": "2026-01-01T00:00:00Z",
+            "not_after": "2026-04-01T00:00:00Z",
+        }]
+        error = HTTPError("https://crt.sh", 502, "Bad Gateway", {}, None)
+        with patch.object(osint, "fetch_json", side_effect=[error, response]) as fetch:
+            result = osint.lookup_certificates("example.org", 5)
+        self.assertEqual(fetch.call_count, 2)
+        self.assertIn("api.certspotter.com", fetch.call_args_list[1].args[0])
+        self.assertEqual(result["provider"], "Cert Spotter")
+        self.assertEqual(result["records"][0]["issuer"], "Example CA")
+        self.assertEqual(result["records"][0]["names"], ["example.org", "www.example.org"])
+
+    def test_crt_sh_response_is_normalized(self):
+        response = [{
+            "id": 123,
+            "name_value": "example.org\nwww.example.org",
+            "issuer_name": "Example CA",
+            "not_before": "2026-01-01",
+            "not_after": "2026-04-01",
+        }]
+        with patch.object(osint, "fetch_json", return_value=response):
+            result = osint.lookup_certificates("example.org", 5)
+        self.assertEqual(result["provider"], "crt.sh")
+        self.assertEqual(result["records"][0]["names"], ["example.org", "www.example.org"])
+
+
+class ProfileTests(unittest.TestCase):
+    def test_bug_bounty_providers_require_exact_username(self):
+        cases = {
+            "Bugcrowd": ("username", "Researcher"),
+            "YesWeHack": ("slug", "Researcher"),
+            "Intigriti": ("userName", "Researcher"),
+        }
+        for provider, (field, returned_name) in cases.items():
+            with patch.object(osint, "fetch_json", return_value={field: returned_name}):
+                self.assertTrue(osint.lookup_bug_bounty_profile(provider, "researcher", 5))
+            with patch.object(osint, "fetch_json", return_value={field: "another-user"}):
+                self.assertFalse(osint.lookup_bug_bounty_profile(provider, "researcher", 5))
+
+    def test_hackerone_requires_exact_https_profile_response(self):
+        class Headers:
+            def get_content_type(self):
+                return self.content_type
+
+            def __init__(self, content_type):
+                self.content_type = content_type
+
+        class Response:
+            status = 200
+
+            def __init__(self, url, content_type="text/html"):
+                self.url = url
+                self.headers = Headers(content_type)
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def geturl(self):
+                return self.url
+
+        cases = (
+            ("https://hackerone.com/researcher?type=user", "text/html", True),
+            ("https://hackerone.com/another-user?type=user", "text/html", False),
+            ("https://example.org/researcher?type=user", "text/html", False),
+            ("http://hackerone.com/researcher?type=user", "text/html", False),
+            ("https://hackerone.com/researcher?type=user", "application/json", False),
+        )
+        for final_url, content_type, expected in cases:
+            response = Response(final_url, content_type)
+            with patch.object(osint, "urlopen", return_value=response):
+                actual = osint.lookup_bug_bounty_profile("HackerOne", "researcher", 5)
+            self.assertEqual(actual, expected, final_url)
+
+    def test_missing_hackerone_profile_is_not_reported(self):
+        error = HTTPError("https://hackerone.com/missing", 404, "Not Found", {}, None)
+        with patch.object(osint, "urlopen", side_effect=error):
+            self.assertFalse(osint.lookup_bug_bounty_profile("HackerOne", "missing", 5))
+
+    def test_missing_bug_bounty_profile_is_not_reported(self):
+        error = HTTPError("https://example.test", 404, "Not Found", {}, None)
+        with patch.object(osint, "fetch_json", side_effect=error):
+            self.assertFalse(osint.lookup_bug_bounty_profile("Bugcrowd", "missing", 5))
+
+    def test_username_search_uses_current_bug_bounty_paths(self):
+        report = osint.build_search_report("researcher", "username")
+        queries = {item["source"]: item["query"] for item in report["searches"]}
+        self.assertEqual(queries["Bugcrowd"], "site:bugcrowd.com/h/researcher")
+        self.assertEqual(queries["YesWeHack"], "site:yeswehack.com/hunters/researcher")
+        self.assertEqual(queries["Intigriti"], "site:app.intigriti.com/profile/researcher")
+
+
+class LocalReportTests(unittest.TestCase):
+    def test_indicator_classification_and_privacy_guards(self):
+        self.assertEqual(osint.classify_indicator("example.org"), ("domain", "example.org"))
+        self.assertEqual(osint.classify_indicator("8.8.8.8"), ("ip", "8.8.8.8"))
+        self.assertEqual(osint.classify_indicator("A" * 64), ("hash", "a" * 64))
+        self.assertEqual(osint.classify_indicator("https://example.org/path"), ("url", "https://example.org/path"))
+        for unsafe in (
+            "https://user:password@example.org/",
+            "https://example.org/?token=secret",
+            "https://127.0.0.1/",
+        ):
+            with self.assertRaises(osint.argparse.ArgumentTypeError):
+                osint.classify_indicator(unsafe)
+
+    def test_phone_report_uses_only_local_numbering_metadata(self):
+        report = osint.build_phone_report("+14155552671")
+        self.assertEqual(report["e164"], "+14155552671")
+        self.assertEqual(report["region_code"], "US")
+        self.assertIn("no owner lookup", report["mode"])
 
 
 class UpdaterTests(unittest.TestCase):

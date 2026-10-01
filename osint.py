@@ -5,8 +5,8 @@ from __future__ import annotations
 
 import argparse
 import base64
-import hashlib
 import getpass
+import hashlib
 import ipaddress
 import json
 import os
@@ -16,25 +16,23 @@ import subprocess
 import sys
 import tempfile
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from importlib import metadata
 from pathlib import Path
-from html.parser import HTMLParser
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode, urlsplit
 from urllib.request import Request, urlopen
 
 import keyring
-from keyring.errors import KeyringError, PasswordDeleteError
 import phonenumbers
+from keyring.errors import KeyringError, PasswordDeleteError
 from rich.console import Console
 from rich.theme import Theme
 from rich_argparse import RichHelpFormatter
 
-
-__version__ = "1.5.1"
+__version__ = "1.5.2"
 USER_AGENT = f"OpenOSINTKit/{__version__} (passive public-source research)"
 GITHUB_RELEASE_API = "https://api.github.com/repos/IsdarlinM/open-osint-kit/releases/latest"
 GITHUB_MAIN_COMMIT_API = "https://api.github.com/repos/IsdarlinM/open-osint-kit/commits/main"
@@ -313,7 +311,7 @@ def _shodan_cache_path(
 ) -> Path:
     key_fingerprint = hashlib.sha256(api_key.encode("utf-8")).hexdigest()
     cache_identifier = hashlib.sha256(
-        f"{query}\0{limit}\0{key_fingerprint}".encode("utf-8")
+        f"{query}\0{limit}\0{key_fingerprint}".encode()
     ).hexdigest()
     return (cache_dir or shodan_cache_directory()) / f"{cache_identifier}.json"
 
@@ -531,34 +529,93 @@ def lookup_rdap(domain: str, timeout: int) -> dict:
 
 
 def lookup_certificates(domain: str, timeout: int) -> dict:
-    url = "https://crt.sh/?" + urlencode({"q": f"%.{domain}", "output": "json"})
-    records = fetch_json(url, timeout)
+    crt_url = "https://crt.sh/?" + urlencode({"q": f"%.{domain}", "output": "json"})
+    provider = "crt.sh"
+    try:
+        records = fetch_json(crt_url, timeout)
+    except (HTTPError, URLError, TimeoutError, OSError, ValueError, TypeError):
+        provider = "Cert Spotter"
+        cert_spotter_url = "https://api.certspotter.com/v1/issuances?" + urlencode(
+            [
+                ("domain", domain),
+                ("include_subdomains", "true"),
+                ("expand", "dns_names"),
+                ("expand", "issuer"),
+            ]
+        )
+        records = fetch_json(cert_spotter_url, timeout)
+    if not isinstance(records, list):
+        raise TypeError("certificate transparency response is not a list")
+
     certificates = []
     seen = set()
     for record in records:
+        if not isinstance(record, dict):
+            continue
         key = record.get("id")
         if key in seen:
             continue
         seen.add(key)
-        certificates.append({
-            "id": key,
-            "names": record.get("name_value", "").splitlines(),
-            "issuer": record.get("issuer_name"),
-            "not_before": record.get("not_before"),
-            "not_after": record.get("not_after"),
-        })
+        if provider == "crt.sh":
+            names = str(record.get("name_value", "")).splitlines()
+            issuer = record.get("issuer_name")
+        else:
+            names = record.get("dns_names", [])
+            issuer_data = record.get("issuer")
+            issuer = issuer_data.get("name") if isinstance(issuer_data, dict) else None
+        certificates.append(
+            {
+                "id": key,
+                "names": names,
+                "issuer": issuer,
+                "not_before": record.get("not_before"),
+                "not_after": record.get("not_after"),
+            }
+        )
         if len(certificates) == 100:
             break
-    return {"count_returned": len(certificates), "records": certificates}
+    return {
+        "provider": provider,
+        "count_returned": len(certificates),
+        "records": certificates,
+    }
 
 
 def lookup_dns(domain: str, record_type: str, timeout: int) -> dict:
     query = urlencode({"name": domain, "type": record_type})
-    url = f"https://cloudflare-dns.com/dns-query?{query}"
-    data = fetch_json(url, timeout)
+    providers = (
+        ("Cloudflare", f"https://cloudflare-dns.com/dns-query?{query}"),
+        ("Google", f"https://dns.google/resolve?{query}"),
+    )
+    last_error = None
+    for provider, url in providers:
+        try:
+            data = fetch_json(url, timeout)
+            if not isinstance(data, dict):
+                raise TypeError("DNS response is not an object")
+            break
+        except (
+            HTTPError,
+            URLError,
+            TimeoutError,
+            OSError,
+            ValueError,
+            TypeError,
+        ) as error:
+            last_error = error
+    else:
+        raise OSError(
+            f"all DNS-over-HTTPS providers failed: {last_error}"
+        ) from last_error
+
     return {
+        "provider": provider,
         "status_code": data.get("Status"),
-        "answers": [answer.get("data") for answer in data.get("Answer", [])],
+        "answers": [
+            answer.get("data")
+            for answer in data.get("Answer", [])
+            if isinstance(answer, dict)
+        ],
     }
 
 
@@ -680,16 +737,18 @@ def build_search_report(target: str, kind: str) -> dict:
     term = f'"{target.strip()}"'
     if kind == "username":
         queries = [
-            ("Reddit", f'site:reddit.com {term}'),
-            ("GitHub", f'site:github.com {term}'),
-            ("GitLab", f'site:gitlab.com {term}'),
-            ("HackerOne", f'site:hackerone.com/{target.strip()}'),
-            ("Bugcrowd", f'site:bugcrowd.com/{target.strip()}'),
-            ("TryHackMe", f'site:tryhackme.com/p/{target.strip()}'),
-            ("Hack The Box", f'site:app.hackthebox.com/profile/{target.strip()}'),
-            ("LinkedIn", f'site:linkedin.com/in {term}'),
-            ("Wellfound", f'site:wellfound.com/u/{target.strip()}'),
-            ("Indeed", f'site:indeed.com {term}'),
+            ("Reddit", f"site:reddit.com {term}"),
+            ("GitHub", f"site:github.com {term}"),
+            ("GitLab", f"site:gitlab.com {term}"),
+            ("HackerOne", f"site:hackerone.com/{target.strip()}"),
+            ("Bugcrowd", f"site:bugcrowd.com/h/{target.strip()}"),
+            ("YesWeHack", f"site:yeswehack.com/hunters/{target.strip()}"),
+            ("Intigriti", f"site:app.intigriti.com/profile/{target.strip()}"),
+            ("TryHackMe", f"site:tryhackme.com/p/{target.strip()}"),
+            ("Hack The Box", f"site:app.hackthebox.com/profile/{target.strip()}"),
+            ("LinkedIn", f"site:linkedin.com/in {term}"),
+            ("Wellfound", f"site:wellfound.com/u/{target.strip()}"),
+            ("Indeed", f"site:indeed.com {term}"),
             ("DuckDuckGo", term),
             ("Google", term),
             ("Bing", term),
@@ -699,22 +758,22 @@ def build_search_report(target: str, kind: str) -> dict:
             ("DuckDuckGo", term),
             ("Google", term),
             ("Bing", term),
-            ("GitHub", f'site:github.com {term}'),
-            ("Reddit", f'site:reddit.com {term}'),
-            ("LinkedIn", f'site:linkedin.com/company {term}'),
-            ("OpenCorporates", f'site:opencorporates.com {term}'),
-            ("Crunchbase", f'site:crunchbase.com/organization {term}'),
+            ("GitHub", f"site:github.com {term}"),
+            ("Reddit", f"site:reddit.com {term}"),
+            ("LinkedIn", f"site:linkedin.com/company {term}"),
+            ("OpenCorporates", f"site:opencorporates.com {term}"),
+            ("Crunchbase", f"site:crunchbase.com/organization {term}"),
         ]
     else:
         queries = [
             ("DuckDuckGo", term),
             ("Google", term),
             ("Bing", term),
-            ("GitHub", f'site:github.com {term}'),
-            ("Reddit", f'site:reddit.com {term}'),
-            ("LinkedIn", f'site:linkedin.com/in {term}'),
-            ("Google News", f'{term}'),
-            ("Google Scholar", f'site:scholar.google.com {term}'),
+            ("GitHub", f"site:github.com {term}"),
+            ("Reddit", f"site:reddit.com {term}"),
+            ("LinkedIn", f"site:linkedin.com/in {term}"),
+            ("Google News", f"{term}"),
+            ("Google Scholar", f"site:scholar.google.com {term}"),
         ]
     return {
         "target": target,
@@ -722,7 +781,13 @@ def build_search_report(target: str, kind: str) -> dict:
         "mode": "manual search links; no search is performed and no identity is verified",
         "privacy_scope": "public sources only; no private contact details or sensitive personal records are collected",
         "searches": [
-            {"source": source, "query": query, "url": "https://www.google.com/search?" + urlencode({"q": query}) if source not in {"DuckDuckGo", "Google", "Bing"} else _search_url(source, query)}
+            {
+                "source": source,
+                "query": query,
+                "url": "https://www.google.com/search?" + urlencode({"q": query})
+                if source not in {"DuckDuckGo", "Google", "Bing"}
+                else _search_url(source, query),
+            }
             for source, query in queries
         ],
     }
@@ -735,91 +800,53 @@ def valid_username(value: str) -> str:
     return username
 
 
-class _ProfilePageEvidence(HTMLParser):
-    def __init__(self) -> None:
-        super().__init__(convert_charrefs=True)
-        self.canonical_urls: list[str] = []
-        self.open_graph_types: list[str] = []
-        self.headings: list[str] = []
-        self.text_parts: list[str] = []
-        self._in_heading = False
-        self._heading_parts: list[str] = []
-
-    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        attributes = dict(attrs)
-        if tag == "link" and "canonical" in attributes.get("rel", "").casefold():
-            href = attributes.get("href")
-            if href:
-                self.canonical_urls.append(href)
-        if tag == "meta":
-            if attributes.get("property", "").casefold() == "og:url" and attributes.get("content"):
-                self.canonical_urls.append(attributes["content"])
-            if attributes.get("property", "").casefold() == "og:type" and attributes.get("content"):
-                self.open_graph_types.append(attributes["content"].casefold())
-        if tag == "h1":
-            self._in_heading = True
-            self._heading_parts = []
-
-    def handle_endtag(self, tag: str) -> None:
-        if tag == "h1" and self._in_heading:
-            heading = " ".join("".join(self._heading_parts).split())
-            if heading:
-                self.headings.append(heading)
-            self._in_heading = False
-            self._heading_parts = []
-
-    def handle_data(self, data: str) -> None:
-        if self._in_heading:
-            self._heading_parts.append(data)
-        if len(self.text_parts) < 20000:
-            self.text_parts.append(data)
-
-
 def lookup_bug_bounty_profile(provider: str, username: str, timeout: int) -> bool:
     encoded_username = quote(username, safe="")
     if provider == "HackerOne":
         profile_url = f"https://hackerone.com/{encoded_username}?type=user"
-        expected_path = f"/{encoded_username}".casefold()
+        request = Request(
+            profile_url,
+            headers={"Accept": "text/html", "User-Agent": USER_AGENT},
+        )
+        try:
+            with urlopen(request, timeout=timeout) as response:
+                final_url = urlsplit(response.geturl())
+                expected_path = f"/{encoded_username}".casefold()
+                return (
+                    response.status == 200
+                    and response.headers.get_content_type() == "text/html"
+                    and final_url.scheme == "https"
+                    and final_url.hostname == "hackerone.com"
+                    and final_url.path.rstrip("/").casefold() == expected_path
+                )
+        except HTTPError as error:
+            if error.code == 404:
+                return False
+            raise
     elif provider == "Bugcrowd":
-        profile_url = f"https://bugcrowd.com/h/{encoded_username}"
-        expected_path = f"/h/{encoded_username}".casefold()
+        api_url = f"https://bugcrowd.com/profile-service/v1/profiles/{encoded_username}"
+        username_field = "username"
+    elif provider == "YesWeHack":
+        api_url = f"https://api.yeswehack.com/hunters/{encoded_username}"
+        username_field = "slug"
+    elif provider == "Intigriti":
+        api_url = (
+            f"https://app.intigriti.com/api/user/public/profile/{encoded_username}"
+        )
+        username_field = "userName"
     else:
         raise ValueError("unsupported bug bounty provider")
 
-    request = Request(
-        profile_url,
-        headers={"Accept": "text/html", "User-Agent": USER_AGENT},
-    )
     try:
-        with urlopen(request, timeout=timeout) as response:
-            if response.status != 200:
-                return False
-            final_url = urlsplit(response.geturl())
-            if final_url.hostname != urlsplit(profile_url).hostname:
-                return False
-            if final_url.path.rstrip("/").casefold() != expected_path.rstrip("/"):
-                return False
-            page = response.read(1_000_000).decode("utf-8", errors="replace")
+        data = fetch_json(api_url, timeout)
     except HTTPError as error:
         if error.code == 404:
             return False
         raise
-
-    evidence = _ProfilePageEvidence()
-    evidence.feed(page)
-    matching_canonical = any(
-        (parsed := urlsplit(canonical)).hostname == final_url.hostname
-        and parsed.path.rstrip("/").casefold() == expected_path.rstrip("/")
-        for canonical in evidence.canonical_urls
+    return (
+        isinstance(data, dict)
+        and str(data.get(username_field, "")).casefold() == username.casefold()
     )
-    headings = {heading.casefold() for heading in evidence.headings}
-    if provider == "HackerOne":
-        profile_markers = "hacktivity" in " ".join(evidence.text_parts).casefold()
-        return matching_canonical and (username.casefold() in headings or profile_markers)
-
-    page_text = " ".join(evidence.text_parts).casefold()
-    bugcrowd_profile_markers = "performance stats" in page_text and "all-time points" in page_text
-    return matching_canonical and bool(evidence.headings) and bugcrowd_profile_markers
 
 
 def probe_profile(
@@ -939,6 +966,20 @@ def build_profile_report(username: str, timeout: int) -> dict:
             f"https://bugcrowd.com/h/{encoded_username}",
             None,
             lambda: lookup_bug_bounty_profile("Bugcrowd", username, timeout),
+        ),
+        (
+            "YesWeHack",
+            "bug bounty",
+            f"https://yeswehack.com/hunters/{encoded_username}",
+            None,
+            lambda: lookup_bug_bounty_profile("YesWeHack", username, timeout),
+        ),
+        (
+            "Intigriti",
+            "bug bounty",
+            f"https://app.intigriti.com/profile/{encoded_username}",
+            None,
+            lambda: lookup_bug_bounty_profile("Intigriti", username, timeout),
         ),
     ]
 

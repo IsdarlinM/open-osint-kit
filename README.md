@@ -1,4 +1,4 @@
-# Open OSINT Kit 1.5.1
+# Open OSINT Kit 1.5.2
 
 ![Open OSINT Kit: open-source intelligence](assets/banner.svg)
 
@@ -14,7 +14,7 @@ Cross-platform Python CLI for authorized research into domains, infrastructure, 
 
 `search` generates manual search links for usernames, people, companies, and organizations. It does not scrape profiles, collect search results, or verify identities.
 
-`profiles` checks one username against public APIs for GitHub, GitLab, DEV Community, Hacker News, Bluesky, Reddit, Mastodon.social, Codeberg, and Hugging Face, and public profile pages for HackerOne and Bugcrowd. Confirmed bug bounty accounts are labeled `bug bounty` and prioritized after social networks/forums. It displays only exact confirmed matches with their category and public profile URL; missing accounts, generic pages, and unavailable APIs are omitted. For Bluesky, a username without a domain is checked as `<username>.bsky.social`. Mastodon checks the `mastodon.social` instance only.
+`profiles` checks one username against public APIs for GitHub, GitLab, DEV Community, Hacker News, Bluesky, Reddit, Mastodon.social, Codeberg, Hugging Face, Bugcrowd, YesWeHack, and Intigriti, and confirms HackerOne profile routes. Confirmed bug bounty accounts are labeled `bug bounty` and prioritized after social networks/forums. It displays only exact confirmed matches with their category and public profile URL; missing accounts, generic pages, and unavailable APIs are omitted. For Bluesky, a username without a domain is checked as `<username>.bsky.social`. Mastodon checks the `mastodon.social` instance only.
 
 `phone` validates an international E.164 number and reports its formatting, numbering-plan region, and line type. It does not query carriers, identify owners, or verify that a line is active.
 
@@ -30,7 +30,7 @@ Terminal help and JSON output use color by default. Rich automatically disables 
 
 `compare old-report.json new-report.json` produces a local field-level diff and ignores generated timestamps and cache metadata.
 
-For sites without a reliable public profile API, `search --kind username` also creates manual search links for HackerOne, Bugcrowd, TryHackMe, Hack The Box, LinkedIn, Wellfound, and Indeed, prioritized before general search engines. These are search links, not confirmed profile results.
+For sites without a reliable public profile API, `search --kind username` also creates manual search links for HackerOne, Bugcrowd, YesWeHack, Intigriti, TryHackMe, Hack The Box, LinkedIn, Wellfound, and Indeed, prioritized before general search engines. These are search links, not confirmed profile results.
 
 ## Installation
 
