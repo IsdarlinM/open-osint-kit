@@ -5,8 +5,10 @@ from __future__ import annotations
 
 import argparse
 import base64
+import csv
 import getpass
 import hashlib
+import io
 import ipaddress
 import json
 import os
@@ -29,10 +31,12 @@ import keyring
 import phonenumbers
 from keyring.errors import KeyringError, PasswordDeleteError
 from rich.console import Console
+from rich.markup import escape
+from rich.table import Table
 from rich.theme import Theme
 from rich_argparse import RichHelpFormatter
 
-__version__ = "1.5.2"
+__version__ = "1.6.0"
 USER_AGENT = f"OpenOSINTKit/{__version__} (passive public-source research)"
 GITHUB_RELEASE_API = "https://api.github.com/repos/IsdarlinM/open-osint-kit/releases/latest"
 GITHUB_MAIN_COMMIT_API = "https://api.github.com/repos/IsdarlinM/open-osint-kit/commits/main"
@@ -43,6 +47,7 @@ DNS_TYPES = ("A", "AAAA", "MX", "NS", "TXT", "CAA")
 SHODAN_RESULTS_PER_PAGE = 100
 SHODAN_MAX_RESULTS = 500
 SHODAN_DEFAULT_CACHE_TTL = 300
+REPORT_FORMATS = ("table", "json", "csv", "markdown")
 KEYRING_SERVICE = "open-osint-kit"
 KEYRING_USERNAME = "shodan-api-key"
 CLI_THEME = Theme({
@@ -1163,14 +1168,179 @@ def _search_url(source: str, query: str) -> str:
     return f"https://www.google.com/search?{query_string}"
 
 
-def write_report(report: dict, output_path: str | None) -> int:
-    rendered = json.dumps(report, ensure_ascii=False, indent=2)
+def _report_rows(report: object) -> list[tuple[str, str]]:
+    rows = []
+
+    def visit(value: object, path: str) -> None:
+        if isinstance(value, dict):
+            if not value:
+                rows.append((path, "{}"))
+            for key, child in value.items():
+                child_path = f"{path}.{key}" if path else str(key)
+                visit(child, child_path)
+        elif isinstance(value, list):
+            if not value:
+                rows.append((path, "[]"))
+            for index, child in enumerate(value):
+                visit(child, f"{path}[{index}]")
+        elif isinstance(value, str):
+            rows.append((path, value))
+        else:
+            rows.append((path, json.dumps(value, ensure_ascii=False)))
+
+    visit(report, "")
+    return rows
+
+
+def _report_table_parts(report: object) -> tuple[list[tuple[str, object]], list[tuple[str, list[dict]]]]:
+    fields = []
+    record_tables = []
+
+    def visit(value: object, path: str) -> None:
+        if isinstance(value, dict):
+            if not value:
+                fields.append((path, "{}"))
+            for key, child in value.items():
+                child_path = f"{path}.{key}" if path else str(key)
+                visit(child, child_path)
+        elif isinstance(value, list):
+            if value and all(isinstance(item, dict) for item in value):
+                record_tables.append((path or "Results", value))
+            elif not value:
+                fields.append((path, "[]"))
+            else:
+                for index, child in enumerate(value):
+                    visit(child, f"{path}[{index}]")
+        else:
+            fields.append((path, value))
+
+    visit(report, "")
+    return fields, record_tables
+
+
+def _table_cell(value: object) -> str:
+    if value is None:
+        text = "—"
+    elif isinstance(value, bool):
+        text = "Yes" if value else "No"
+    elif isinstance(value, (dict, list)):
+        text = json.dumps(value, ensure_ascii=False, separators=(",", ": "))
+    else:
+        text = str(value)
+    return escape(text)
+
+
+def _render_report_table(console: Console, report: dict) -> None:
+    title = report.get("target") or report.get("comparison") or "OSINT report"
+    fields, record_tables = _report_table_parts(report)
+
+    if fields:
+        table = Table(title=f"OSINT report: {escape(str(title))}", expand=True)
+        table.add_column("Field", style="cyan", overflow="fold")
+        table.add_column("Value", overflow="fold")
+        for field, value in fields:
+            table.add_row(_table_cell(field), _table_cell(value))
+        console.print(table)
+
+    for table_title, records in record_tables:
+        columns = list(dict.fromkeys(key for record in records for key in record))
+        table = Table(title=escape(table_title), expand=True)
+        if not columns:
+            table.add_column("Record")
+            for _record in records:
+                table.add_row("{}")
+            console.print(table)
+            continue
+        for column in columns:
+            table.add_column(escape(str(column)), overflow="fold")
+        for record in records:
+            table.add_row(*(_table_cell(record.get(column)) for column in columns))
+        console.print(table)
+
+
+def _render_table_text(report: dict) -> str:
+    buffer = io.StringIO()
+    file_console = Console(
+        file=buffer,
+        width=120,
+        color_system=None,
+        force_terminal=False,
+        highlight=False,
+    )
+    _render_report_table(file_console, report)
+    return buffer.getvalue()
+
+
+def _render_csv(report: dict) -> str:
+    buffer = io.StringIO(newline="")
+    writer = csv.writer(buffer)
+    writer.writerow(("field", "value"))
+    writer.writerows(_report_rows(report))
+    return buffer.getvalue()
+
+
+def _markdown_cell(value: str) -> str:
+    return value.replace("|", "\\|").replace("\r\n", "<br>").replace("\n", "<br>")
+
+
+def _render_markdown(report: dict) -> str:
+    title = report.get("target") or report.get("comparison") or "OSINT report"
+    lines = [f"# {_markdown_cell(str(title))}", "", "| Field | Value |", "| --- | --- |"]
+    lines.extend(
+        f"| {_markdown_cell(field)} | {_markdown_cell(value)} |"
+        for field, value in _report_rows(report)
+    )
+    return "\n".join(lines) + "\n"
+
+
+def _resolve_report_format(output_format: str | None, output_path: str | None) -> str:
+    if output_format:
+        return output_format
     if not output_path:
-        CONSOLE.print_json(data=report)
+        return "table"
+    extension = Path(output_path).suffix.casefold()
+    return {
+        ".csv": "csv",
+        ".md": "markdown",
+        ".markdown": "markdown",
+        ".txt": "table",
+    }.get(extension, "json")
+
+
+def add_report_output_options(command_parser: argparse.ArgumentParser) -> None:
+    command_parser.add_argument("-o", "--output", help="write the report to this file")
+    command_parser.add_argument(
+        "--format",
+        choices=REPORT_FORMATS,
+        help="format: table, json, csv, or markdown (default: table in CLI; inferred for files)",
+    )
+
+
+def write_report(
+    report: dict, output_path: str | None, output_format: str | None = None
+) -> int:
+    selected_format = _resolve_report_format(output_format, output_path)
+    if selected_format == "table" and not output_path:
+        _render_report_table(CONSOLE, report)
+        return 0
+    if selected_format == "json":
+        rendered = json.dumps(report, ensure_ascii=False, indent=2) + "\n"
+    elif selected_format == "csv":
+        rendered = _render_csv(report)
+    elif selected_format == "markdown":
+        rendered = _render_markdown(report)
+    else:
+        rendered = _render_table_text(report)
+
+    if not output_path:
+        if selected_format == "json":
+            CONSOLE.print_json(data=report)
+        else:
+            sys.stdout.write(rendered)
         return 0
     try:
-        with open(output_path, "w", encoding="utf-8") as output_file:
-            output_file.write(rendered + "\n")
+        with open(output_path, "w", encoding="utf-8", newline="") as output_file:
+            output_file.write(rendered)
     except OSError as error:
         ERROR_CONSOLE.print(f"[error]Could not write report: {error}[/error]")
         return 1
@@ -1241,30 +1411,30 @@ def main() -> int:
     subparsers = parser.add_subparsers(dest="command", parser_class=ColorArgumentParser)
     domain_parser = subparsers.add_parser("domain", help="Look up RDAP, DNS, and TLS certificate transparency")
     domain_parser.add_argument("target", type=valid_domain, help="domain under authorized investigation")
-    domain_parser.add_argument("-o", "--output", help="write the JSON report to this path")
+    add_report_output_options(domain_parser)
     domain_parser.add_argument("--timeout", type=int, default=10, help="timeout per source, in seconds (1-60)")
     ip_parser = subparsers.add_parser("ip", help="Look up RDAP and reverse DNS for a public IP")
     ip_parser.add_argument("target", type=valid_public_ip, help="public IPv4 or IPv6 address")
-    ip_parser.add_argument("-o", "--output", help="write the JSON report to this path")
+    add_report_output_options(ip_parser)
     ip_parser.add_argument("--timeout", type=int, default=10, help="timeout per source, in seconds (1-60)")
     ioc_parser = subparsers.add_parser("ioc", help="Generate reputation links for an indicator")
     ioc_parser.add_argument("indicator", help="domain, IP address, HTTP(S) URL, or MD5/SHA1/SHA256 hash")
-    ioc_parser.add_argument("-o", "--output", help="write the JSON report to this path")
+    add_report_output_options(ioc_parser)
     search_parser = subparsers.add_parser("search", help="Generate links for manual public-source searches")
     search_parser.add_argument("target", help="username, person, company, or organization name")
     search_parser.add_argument("--kind", choices=("username", "person", "organization", "company"), required=True)
-    search_parser.add_argument("-o", "--output", help="write the JSON report to this path")
+    add_report_output_options(search_parser)
     profiles_parser = subparsers.add_parser("profiles", help="Check public profile presence for one username")
     profiles_parser.add_argument("username", type=valid_username, help="single username to check")
     profiles_parser.add_argument("--timeout", type=int, default=10, help="timeout per service, in seconds (1-30)")
-    profiles_parser.add_argument("-o", "--output", help="write the JSON report to this path")
+    add_report_output_options(profiles_parser)
     phone_parser = subparsers.add_parser("phone", help="Validate an international phone number without identifying its owner")
     phone_parser.add_argument("number", help="international E.164 number, for example +14155552671")
-    phone_parser.add_argument("-o", "--output", help="write the JSON report to this path")
+    add_report_output_options(phone_parser)
     compare_parser = subparsers.add_parser("compare", help="Compare two saved JSON reports")
     compare_parser.add_argument("before", help="path to the older JSON report")
     compare_parser.add_argument("after", help="path to the newer JSON report")
-    compare_parser.add_argument("-o", "--output", help="write the comparison report to this path")
+    add_report_output_options(compare_parser)
     config_parser = subparsers.add_parser("config", help="Configure secure API credentials")
     config_actions = config_parser.add_subparsers(dest="config_action", required=True)
     config_actions.add_parser("set-shodan-key", help="save a Shodan API key in the OS keyring")
@@ -1276,19 +1446,19 @@ def main() -> int:
     shodan_parser.add_argument("target", type=valid_public_ip, help="public IPv4 or IPv6 address")
     shodan_parser.add_argument("--timeout", type=int, default=10, help="request timeout, in seconds (1-30)")
     shodan_parser.add_argument("--cache-ttl", type=int, default=SHODAN_DEFAULT_CACHE_TTL, help="cache lifetime in seconds (0 disables cache; max 86400)")
-    shodan_parser.add_argument("-o", "--output", help="write the JSON report to this path")
+    add_report_output_options(shodan_parser)
     range_parser = subparsers.add_parser("shodan-range", help="Search Shodan's indexed data for a public IPv4 or IPv6 CIDR range")
     range_parser.add_argument("network", type=valid_public_network, help="public CIDR; maximum 256 addresses (/24 IPv4 or /120 IPv6)")
     range_parser.add_argument("--limit", type=int, choices=(10, 25, 50, 100, 250, 500), default=100, help="maximum indexed results to include (default: 100; max: 500)")
     range_parser.add_argument("--timeout", type=int, default=10, help="request timeout, in seconds (1-30)")
     range_parser.add_argument("--cache-ttl", type=int, default=SHODAN_DEFAULT_CACHE_TTL, help="cache lifetime in seconds (0 disables cache; max 86400)")
-    range_parser.add_argument("-o", "--output", help="write the JSON report to this path")
+    add_report_output_options(range_parser)
     asn_parser = subparsers.add_parser("asn", help="Search Shodan's indexed data for an autonomous system number")
     asn_parser.add_argument("number", type=valid_asn, help="ASN such as AS15169 or 15169")
     asn_parser.add_argument("--limit", type=int, choices=(10, 25, 50, 100, 250, 500), default=100, help="maximum indexed results to include (default: 100; max: 500)")
     asn_parser.add_argument("--timeout", type=int, default=10, help="request timeout, in seconds (1-30)")
     asn_parser.add_argument("--cache-ttl", type=int, default=SHODAN_DEFAULT_CACHE_TTL, help="cache lifetime in seconds (0 disables cache; max 86400)")
-    asn_parser.add_argument("-o", "--output", help="write the JSON report to this path")
+    add_report_output_options(asn_parser)
     args = parser.parse_args()
 
     if args.update:
@@ -1303,7 +1473,7 @@ def main() -> int:
             report = build_report_diff(load_report_file(args.before), load_report_file(args.after))
         except argparse.ArgumentTypeError as error:
             parser.error(str(error))
-        return write_report(report, args.output)
+        return write_report(report, args.output, args.format)
     if args.command in {"domain", "ip"} and not 1 <= args.timeout <= 60:
         parser.error("--timeout must be between 1 and 60 seconds")
     if args.command in {"shodan", "shodan-range", "asn"} and not 1 <= args.timeout <= 30:
@@ -1366,7 +1536,7 @@ def main() -> int:
         if not args.target.strip():
             parser.error("search target cannot be empty")
         report = build_search_report(args.target, args.kind)
-    return write_report(report, args.output)
+    return write_report(report, args.output, args.format)
 
 
 if __name__ == "__main__":
