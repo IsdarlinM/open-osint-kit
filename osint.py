@@ -33,11 +33,12 @@ from keyring.errors import KeyringError, PasswordDeleteError
 from rich import box
 from rich.console import Console
 from rich.markup import escape
+from rich.prompt import Prompt
 from rich.table import Table
 from rich.theme import Theme
 from rich_argparse import RichHelpFormatter
 
-__version__ = "1.9.0"
+__version__ = "1.9.1"
 USER_AGENT = f"OpenOSINTKit/{__version__} (passive public-source research)"
 GITHUB_RELEASE_API = "https://api.github.com/repos/IsdarlinM/open-osint-kit/releases/latest"
 GITHUB_MAIN_COMMIT_API = "https://api.github.com/repos/IsdarlinM/open-osint-kit/commits/main"
@@ -48,6 +49,8 @@ DNS_TYPES = ("A", "AAAA", "MX", "NS", "TXT", "CAA")
 SHODAN_RESULTS_PER_PAGE = 100
 SHODAN_MAX_RESULTS = 500
 SHODAN_DEFAULT_CACHE_TTL = 300
+ASN_REPORT_PROMPT_THRESHOLD = 50
+ASN_REPORT_PAGE_SIZE = 20
 PROFILE_DEFAULT_CACHE_TTL = 900
 PROFILE_MAX_CACHE_TTL = 86400
 PROFILE_DEFAULT_WORKERS = 4
@@ -2052,6 +2055,91 @@ def write_report(
     return 0
 
 
+def _paginate_asn_report(report: dict) -> None:
+    records = report.get("results", [])
+    page_count = (len(records) + ASN_REPORT_PAGE_SIZE - 1) // ASN_REPORT_PAGE_SIZE
+    page = 0
+    header = {key: value for key, value in report.items() if key != "results"}
+    while True:
+        start = page * ASN_REPORT_PAGE_SIZE
+        end = min(start + ASN_REPORT_PAGE_SIZE, len(records))
+        _render_report_table(CONSOLE, header)
+        CONSOLE.print(
+            f"\n[bold]ASN results {start + 1}-{end} of {len(records)} "
+            f"(page {page + 1}/{page_count})[/bold]"
+        )
+        _render_report_table(CONSOLE, {"results": records[start:end]})
+        action = Prompt.ask(
+            "[info]n next, p previous, q finish[/info]",
+            choices=("n", "p", "q"),
+            default="n",
+            console=CONSOLE,
+        )
+        if action == "q":
+            return
+        if action == "n" and page + 1 < page_count:
+            page += 1
+            CONSOLE.clear()
+        elif action == "p" and page > 0:
+            page -= 1
+            CONSOLE.clear()
+        else:
+            CONSOLE.print("[warning]There is no page in that direction.[/warning]")
+
+
+def _prompt_export_asn_report(report: dict) -> int:
+    output_format = Prompt.ask(
+        "Export format",
+        choices=REPORT_FORMATS,
+        default="json",
+        console=CONSOLE,
+    )
+    extension = {
+        "table": "txt",
+        "json": "json",
+        "csv": "csv",
+        "markdown": "md",
+    }[output_format]
+    target_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(report.get("target", "asn")))
+    default_path = f"{target_name}-report.{extension}"
+    output_path = Prompt.ask("Export path", default=default_path, console=CONSOLE)
+    return write_report(report, output_path, output_format)
+
+
+def write_asn_report(
+    report: dict,
+    output_path: str | None,
+    output_format: str | None = None,
+) -> int:
+    records = report.get("results", [])
+    is_interactive_table = output_format in (None, "table")
+    can_prompt = sys.stdin.isatty() and sys.stdout.isatty()
+    if (
+        len(records) < ASN_REPORT_PROMPT_THRESHOLD
+        or output_path
+        or not is_interactive_table
+        or not can_prompt
+    ):
+        return write_report(report, output_path, output_format)
+
+    CONSOLE.print(
+        f"[info]This ASN report contains {len(records)} results. "
+        "Choose how to view the full report.[/info]"
+    )
+    choice = Prompt.ask(
+        "1 paginate, 2 export, 3 cancel",
+        choices=("1", "2", "3"),
+        console=CONSOLE,
+    )
+    if choice == "1":
+        _paginate_asn_report(report)
+        return 0
+    if choice == "2":
+        return _prompt_export_asn_report(report)
+    CONSOLE.print("[warning]ASN report output cancelled.[/warning]")
+    return 0
+
+
 def _collect_report_changes(before: object, after: object, path: str = "") -> list[dict]:
     if isinstance(before, dict) and isinstance(after, dict):
         changes = []
@@ -2332,7 +2420,7 @@ def main() -> int:
     add_report_output_options(range_parser)
     asn_parser = subparsers.add_parser(
         "asn",
-        help="Investigate an ASN with Shodan or fall back to RIPEstat announced prefixes",
+        help="Investigate an ASN with Shodan or RIPEstat; large terminal reports can be paged or exported",
     )
     asn_parser.add_argument("number", type=valid_asn, help="ASN such as AS15169 or 15169")
     asn_parser.add_argument("--limit", type=int, choices=(10, 25, 50, 100, 250, 500), default=100, help="maximum hosts or announced prefixes to include (default: 100; max: 500)")
@@ -2451,6 +2539,8 @@ def main() -> int:
             report = build_search_report(args.target, args.kind)
         except argparse.ArgumentTypeError as error:
             parser.error(str(error))
+    if args.command == "asn":
+        return write_asn_report(report, args.output, args.format)
     return write_report(report, args.output, args.format)
 
 
