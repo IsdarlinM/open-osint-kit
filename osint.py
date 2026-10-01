@@ -36,7 +36,7 @@ from rich.table import Table
 from rich.theme import Theme
 from rich_argparse import RichHelpFormatter
 
-__version__ = "1.6.0"
+__version__ = "1.7.0"
 USER_AGENT = f"OpenOSINTKit/{__version__} (passive public-source research)"
 GITHUB_RELEASE_API = "https://api.github.com/repos/IsdarlinM/open-osint-kit/releases/latest"
 GITHUB_MAIN_COMMIT_API = "https://api.github.com/repos/IsdarlinM/open-osint-kit/commits/main"
@@ -48,6 +48,14 @@ SHODAN_RESULTS_PER_PAGE = 100
 SHODAN_MAX_RESULTS = 500
 SHODAN_DEFAULT_CACHE_TTL = 300
 REPORT_FORMATS = ("table", "json", "csv", "markdown")
+MASTODON_INSTANCES = (
+    "mastodon.social",
+    "mastodon.online",
+    "mstdn.social",
+    "fosstodon.org",
+    "infosec.exchange",
+    "mastodon.world",
+)
 KEYRING_SERVICE = "open-osint-kit"
 KEYRING_USERNAME = "shodan-api-key"
 CLI_THEME = Theme({
@@ -80,8 +88,10 @@ class ColorArgumentParser(argparse.ArgumentParser):
         super().__init__(*args, **kwargs)
 
 
-def fetch_json(url: str, timeout: int) -> object:
-    request = Request(url, headers={"Accept": "application/json", "User-Agent": USER_AGENT})
+def fetch_json(
+    url: str, timeout: int, accept_header: str = "application/json"
+) -> object:
+    request = Request(url, headers={"Accept": accept_header, "User-Agent": USER_AGENT})
     with urlopen(request, timeout=timeout) as response:
         return json.loads(response.read().decode("utf-8"))
 
@@ -739,20 +749,44 @@ def build_ioc_report(value: str) -> dict:
 
 
 def build_search_report(target: str, kind: str) -> dict:
-    term = f'"{target.strip()}"'
+    target = valid_username(target) if kind == "username" else target.strip()
+    term = f'"{target}"'
     if kind == "username":
+        path_username = quote(target, safe="._-")
         queries = [
-            ("Reddit", f"site:reddit.com {term}"),
-            ("GitHub", f"site:github.com {term}"),
-            ("GitLab", f"site:gitlab.com {term}"),
-            ("HackerOne", f"site:hackerone.com/{target.strip()}"),
-            ("Bugcrowd", f"site:bugcrowd.com/h/{target.strip()}"),
-            ("YesWeHack", f"site:yeswehack.com/hunters/{target.strip()}"),
-            ("Intigriti", f"site:app.intigriti.com/profile/{target.strip()}"),
-            ("TryHackMe", f"site:tryhackme.com/p/{target.strip()}"),
-            ("Hack The Box", f"site:app.hackthebox.com/profile/{target.strip()}"),
+            ("Instagram", f"site:instagram.com/{path_username}"),
+            ("TikTok", f"site:tiktok.com/@{path_username}"),
+            ("X", f"site:x.com/{path_username} OR site:twitter.com/{path_username}"),
+            ("Threads", f"site:threads.net/@{path_username}"),
+            ("Bluesky", f"site:bsky.app/profile/{path_username}"),
+            (
+                "Mastodon",
+                "(" + " OR ".join(
+                    f"site:{instance}/@{path_username}"
+                    for instance in MASTODON_INSTANCES
+                ) + ")",
+            ),
+            ("Reddit", f"site:reddit.com/user/{path_username}"),
+            ("YouTube", f"site:youtube.com/@{path_username}"),
+            ("Twitch", f"site:twitch.tv/{path_username}"),
+            ("Telegram", f"site:t.me/{path_username}"),
+            ("Pinterest", f"site:pinterest.com/{path_username}"),
+            ("Medium", f"site:medium.com/@{path_username}"),
             ("LinkedIn", f"site:linkedin.com/in {term}"),
-            ("Wellfound", f"site:wellfound.com/u/{target.strip()}"),
+            ("GitHub", f"site:github.com/{path_username}"),
+            ("GitLab", f"site:gitlab.com/{path_username}"),
+            ("Codeberg", f"site:codeberg.org/{path_username}"),
+            ("Hugging Face", f"site:huggingface.co/{path_username}"),
+            ("DEV Community", f"site:dev.to/{path_username}"),
+            ("Stack Overflow", f"site:stackoverflow.com/users {term}"),
+            ("Hacker News", f"site:news.ycombinator.com/user?id={path_username}"),
+            ("HackerOne", f"site:hackerone.com/{path_username}"),
+            ("Bugcrowd", f"site:bugcrowd.com/h/{path_username}"),
+            ("YesWeHack", f"site:yeswehack.com/hunters/{path_username}"),
+            ("Intigriti", f"site:app.intigriti.com/profile/{path_username}"),
+            ("TryHackMe", f"site:tryhackme.com/p/{path_username}"),
+            ("Hack The Box", f"site:app.hackthebox.com/profile/{path_username}"),
+            ("Wellfound", f"site:wellfound.com/u/{path_username}"),
             ("Indeed", f"site:indeed.com {term}"),
             ("DuckDuckGo", term),
             ("Google", term),
@@ -854,24 +888,48 @@ def lookup_bug_bounty_profile(provider: str, username: str, timeout: int) -> boo
     )
 
 
+def mastodon_webfinger_matches(data: object, username: str, instance: str) -> bool:
+    if not isinstance(data, dict):
+        return False
+    expected_subject = f"acct:{username}@{instance}".casefold()
+    if str(data.get("subject", "")).casefold() != expected_subject:
+        return False
+    links = data.get("links")
+    if not isinstance(links, list):
+        return False
+    activity_types = {
+        "application/activity+json",
+        'application/ld+json; profile="https://www.w3.org/ns/activitystreams"',
+    }
+    return any(
+        isinstance(link, dict)
+        and link.get("rel") == "self"
+        and str(link.get("type", "")).casefold() in activity_types
+        and urlsplit(str(link.get("href", ""))).scheme == "https"
+        and bool(urlsplit(str(link.get("href", ""))).hostname)
+        for link in links
+    )
+
+
 def probe_profile(
     service: str,
     category: str,
     profile_url: str,
     lookup: Callable[[], bool],
-) -> dict | None:
+) -> dict:
+    status = "not_found"
     try:
         found = lookup()
-    except HTTPError:
-        return None
+    except HTTPError as error:
+        status = "not_found" if error.code == 404 else "unavailable"
     except (URLError, TimeoutError, OSError, ValueError, TypeError, AttributeError):
-        return None
-    if not found:
-        return None
+        status = "unavailable"
+    else:
+        status = "confirmed" if found else "not_found"
     return {
         "service": service,
         "category": category,
-        "status": "confirmed",
+        "status": status,
         "profile_url": profile_url,
     }
 
@@ -935,14 +993,6 @@ def build_profile_report(username: str, timeout: int) -> dict:
             and str(data["data"].get("name", "")).casefold() == username.casefold(),
         ),
         (
-            "Mastodon.social",
-            "social network",
-            f"https://mastodon.social/@{encoded_username}",
-            "https://mastodon.social/api/v1/accounts/lookup?" + urlencode({"acct": username}),
-            lambda data: isinstance(data, dict)
-            and str(data.get("username", "")).casefold() == username.casefold(),
-        ),
-        (
             "Codeberg",
             "developer / cybersecurity",
             f"https://codeberg.org/{encoded_username}",
@@ -987,6 +1037,22 @@ def build_profile_report(username: str, timeout: int) -> dict:
             lambda: lookup_bug_bounty_profile("Intigriti", username, timeout),
         ),
     ]
+    for instance in MASTODON_INSTANCES:
+        resource = f"acct:{username}@{instance}"
+        webfinger_url = (
+            f"https://{instance}/.well-known/webfinger?"
+            + urlencode({"resource": resource})
+        )
+        service = "Mastodon.social" if instance == "mastodon.social" else f"Mastodon ({instance})"
+        profiles.append((
+            service,
+            "social network / fediverse",
+            f"https://{instance}/@{encoded_username}",
+            webfinger_url,
+            lambda data, instance=instance: mastodon_webfinger_matches(
+                data, username, instance
+            ),
+        ))
 
     results = {}
     with ThreadPoolExecutor(max_workers=len(profiles)) as executor:
@@ -994,20 +1060,30 @@ def build_profile_report(username: str, timeout: int) -> dict:
         for service, category, profile_url, api_url, matches in profiles:
             if api_url is None:
                 lookup = matches
+            elif ".well-known/webfinger" in api_url:
+                lookup = lambda api_url=api_url, matches=matches: matches(
+                    fetch_json(
+                        api_url,
+                        timeout,
+                        "application/jrd+json, application/json",
+                    )
+                )
             else:
                 lookup = lambda api_url=api_url, matches=matches: matches(fetch_json(api_url, timeout))
             futures[executor.submit(probe_profile, service, category, profile_url, lookup)] = service
         for future in as_completed(futures):
             results[futures[future]] = future.result()
 
-    profile_results = [
+    profile_checks = [
         results[service]
         for service, _, _, _, _ in profiles
         if results.get(service) is not None
     ]
+    profile_results = [item for item in profile_checks if item["status"] == "confirmed"]
     category_priority = {
         "social network / forums / cybersecurity": 0,
         "social network": 1,
+        "social network / fediverse": 2,
         "technology forum": 2,
         "bug bounty": 3,
         "developer community": 4,
@@ -1015,14 +1091,22 @@ def build_profile_report(username: str, timeout: int) -> dict:
         "developer / AI": 6,
     }
     profile_results.sort(key=lambda item: category_priority.get(item["category"], 99))
+    unavailable = sum(item["status"] == "unavailable" for item in profile_checks)
+    not_found = sum(item["status"] == "not_found" for item in profile_checks)
     return {
         "target": username,
         "target_type": "username",
         "generated_at": datetime.now(timezone.utc).isoformat(),
-        "mode": "public profile existence checks; only exact confirmed matches are displayed",
+        "mode": "exact public profile checks; availability is reported per source",
         "results": profile_results,
-        "summary": {"confirmed": len(profile_results)},
-        "notice": "profiles without an exact match or with unavailable APIs are omitted; a username match does not prove shared ownership",
+        "checks": profile_checks,
+        "summary": {
+            "checked": len(profile_checks),
+            "confirmed": len(profile_results),
+            "not_found": not_found,
+            "unavailable": unavailable,
+        },
+        "notice": "results include exact confirmed username matches; checks distinguish missing profiles from unavailable services; a match does not prove shared ownership",
     }
 
 
@@ -1535,7 +1619,10 @@ def main() -> int:
     else:
         if not args.target.strip():
             parser.error("search target cannot be empty")
-        report = build_search_report(args.target, args.kind)
+        try:
+            report = build_search_report(args.target, args.kind)
+        except argparse.ArgumentTypeError as error:
+            parser.error(str(error))
     return write_report(report, args.output, args.format)
 
 

@@ -1,4 +1,4 @@
-# Open OSINT Kit 1.6.0
+# Open OSINT Kit 1.7.0
 
 ![Open OSINT Kit: open-source intelligence](assets/banner.svg)
 
@@ -14,7 +14,7 @@ Cross-platform Python CLI for authorized research into domains, infrastructure, 
 
 `search` generates manual search links for usernames, people, companies, and organizations. It does not scrape profiles, collect search results, or verify identities.
 
-`profiles` checks one username against public APIs for GitHub, GitLab, DEV Community, Hacker News, Bluesky, Reddit, Mastodon.social, Codeberg, Hugging Face, Bugcrowd, YesWeHack, and Intigriti, and confirms HackerOne profile routes. Confirmed bug bounty accounts are labeled `bug bounty` and prioritized after social networks/forums. It displays only exact confirmed matches with their category and public profile URL; missing accounts, generic pages, and unavailable APIs are omitted. For Bluesky, a username without a domain is checked as `<username>.bsky.social`. Mastodon checks the `mastodon.social` instance only.
+`profiles` checks a username against public APIs for GitHub, GitLab, DEV Community, Hacker News, Bluesky, Reddit, Codeberg, Hugging Face, HackerOne, Bugcrowd, YesWeHack, and Intigriti. It checks Mastodon accounts through WebFinger on mastodon.social, mastodon.online, mstdn.social, fosstodon.org, infosec.exchange, and mastodon.world. Confirmed matches include the category and profile URL. The `checks` table reports each source as `confirmed`, `not_found`, or `unavailable`, so an unreachable or rate-limited API is not mistaken for a missing account. For Bluesky, a username without a domain is checked as `<username>.bsky.social`. Mastodon lookups verify the exact `acct:` subject and ActivityPub profile link.
 
 `phone` validates an international E.164 number and reports its formatting, numbering-plan region, and line type. It does not query carriers, identify owners, or verify that a line is active.
 
@@ -30,7 +30,7 @@ Reports are shown as readable tables by default. Use `--format table`, `--format
 
 `compare old-report.json new-report.json` produces a local field-level diff and ignores generated timestamps and cache metadata.
 
-For sites without a reliable public profile API, `search --kind username` also creates manual search links for HackerOne, Bugcrowd, YesWeHack, Intigriti, TryHackMe, Hack The Box, LinkedIn, Wellfound, and Indeed, prioritized before general search engines. These are search links, not confirmed profile results.
+`search --kind username` creates platform-focused search links for Instagram, TikTok, X, Threads, Bluesky, Mastodon, Reddit, YouTube, Twitch, Telegram, Pinterest, Medium, LinkedIn, developer communities, bug bounty sites, and general search engines. These links help find public profile pages on sites without a reliable unauthenticated lookup API; they are search links, not confirmed profile results.
 
 ## Installation
 
@@ -102,7 +102,7 @@ osint-kit config remove-shodan-key
 
 Shodan results are cached per user for five minutes under `%LOCALAPPDATA%\open-osint-kit\shodan` on Windows or `$XDG_CACHE_HOME/open-osint-kit/shodan` (default `~/.cache/open-osint-kit/shodan`) on Linux. Set `--cache-ttl 0` to disable caching; `config clear-cache` removes the cache without deleting reports saved to user-selected paths.
 
-`domain`, `ip`, `profiles`, `shodan`, `shodan-range`, `asn`, `config test-shodan`, and `--update` require an internet connection. `ioc`, `search`, the other `config` actions, and `phone` do not make research lookups; `phone` analyzes numbering-plan metadata locally. The `domain` and `ip` timeouts apply per source, so a full run may take longer than the configured timeout. `profiles` queries each supported API once, concurrently, and may omit services that rate-limit or cannot be reached.
+`domain`, `ip`, `profiles`, `shodan`, `shodan-range`, `asn`, `config test-shodan`, and `--update` require an internet connection. `ioc`, `search`, the other `config` actions, and `phone` do not make research lookups; `phone` analyzes numbering-plan metadata locally. The `domain` and `ip` timeouts apply per source, so a full run may take longer than the configured timeout. `profiles` queries supported public endpoints concurrently and marks sources that rate-limit or cannot be reached as `unavailable`.
 
 ## Tests
 
@@ -110,4 +110,4 @@ Run the local suite with `python -m unittest discover -s tests -v`. GitHub Actio
 
 ## Responsible Use
 
-Use the kit only for legitimate, authorized research. It does not scan ports, authenticate, or exploit systems. `search` provides links that the user chooses whether to open and is limited to public/professional sources; `profiles` sends the supplied username to the listed APIs and only displays exact matches, without retaining profile details. A match does not prove that accounts belong to the same person. `phone` does not identify the owner. Do not use the tool to locate people or collect home addresses, private data, family details, or sensitive information. URLs with query strings are rejected to reduce the risk of exposing tokens or secrets. Public data may be incomplete, outdated, or subject to terms of use; verify findings before relying on them.
+Use the kit only for legitimate, authorized research. It does not scan ports, authenticate, or exploit systems. `search` provides links that the user chooses whether to open and is limited to public/professional sources; `profiles` sends the supplied username to its supported public endpoints, lists exact matches in `results`, and reports source availability separately in `checks` without retaining profile details. A match does not prove that accounts belong to the same person. `phone` does not identify the owner. Do not use the tool to locate people or collect home addresses, private data, family details, or sensitive information. URLs with query strings are rejected to reduce the risk of exposing tokens or secrets. Public data may be incomplete, outdated, or subject to terms of use; verify findings before relying on them.
